@@ -1,5 +1,5 @@
 # tuya2mqtt: Tuya Devices to MQTT Bridge
-[Add devices in bulk](README.add.md) | [한국어](README.ko.md)
+[한국어](README.ko.md)
 
 `tuya2mqtt` is a Python script that connects Tuya smart devices to an MQTT broker. **It acts as a backend service that maintains a 24-hour TCP connection with registered Tuya devices, instantly publishing state changes to MQTT and allowing you to control devices via MQTT commands.**
 
@@ -101,6 +101,8 @@ When you run the script for the first time, a `tuya2mqtt.conf` file will be crea
 ## Managing Devices via MQTT
 
 ### 1\. Add a Device
+
+[Add devices in bulk via tinytuya wizard](README.add.md)
 
 To add a new Tuya device, publish a JSON payload to the `tuya2mqtt/device/add` topic.
 
