@@ -106,7 +106,7 @@ When you run the script for the first time, a `tuya2mqtt.conf` file will be crea
 
 To add a new Tuya device, publish a JSON payload to the `tuya2mqtt/device/add` topic.
 
-  * **Tuya Wi-Fi Device**: Requires `id`, `ip`, `key`, and `version`.
+  * **Tuya Wi-Fi Device**: Requires `id`, `ip`, `key`, and `version`. `name` is optional.
     ```json
     {
       "id": "ebed836691xxxxxxb",
@@ -116,7 +116,7 @@ To add a new Tuya device, publish a JSON payload to the `tuya2mqtt/device/add` t
       "name": "My_Smart_Plug"
     }
     ```
-  * **Tuya Zigbee/BLE Device**: Requires `id`, `node_id`, and `parent` (the hub's ID).
+  * **Tuya Zigbee/BLE Device**: Requires `id`, `node_id`, and `parent` (the hub's ID). `name` is optional.
     ```json
     {
       "id": "ebed836691xxxxxxb",
@@ -218,4 +218,3 @@ This script is intentionally streamlined and focused on **robustness**. However,
   * **Network Resources**: As the number of Tuya devices increases, a large number of **TCP connections will be kept alive**. This can put a significant load on your router's resources, so make sure you have a router with sufficient capacity.
   * **MQTT Broker Environment**: As device connections and communication become more frequent, the MQTT broker may experience increased load. For **maximum performance**, this script is designed not to use additional security features like TLS (Transport Layer Security). To ensure security, you should prevent external access to your broker and operate it directly on **`localhost`**.
   * **File Descriptors**: The script sets the maximum file descriptor (FD) limit at startup to handle a large number of concurrent device connections.
-  * **Device Deletion**: The `delete` command terminates the communication thread for a specified device and cleans up its resources. If the device is a sub-device connected to a hub, it is also removed from the parent hub's child list.
