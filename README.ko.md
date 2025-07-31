@@ -106,7 +106,7 @@ python tuya2mqtt.py debug
 
 새로운 Tuya 장치를 추가하려면 `tuya2mqtt/device/add` 토픽에 아래와 같은 JSON 페이로드를 발행하세요.
 
-  * **Tuya Wi-Fi 장치**: `id`, `ip`, `key`, `version` 정보가 필요합니다.
+  * **Tuya Wi-Fi 장치**: `id`, `ip`, `key`, `version` 정보가 필요합니다. `name`은 선택사항 입니다.
     ```json
     {
       "id": "ebed836691xxxxxxb",
@@ -116,7 +116,7 @@ python tuya2mqtt.py debug
       "name": "My_Smart_Plug"
     }
     ```
-  * **Tuya Zigbee/BLE 장치**: `id`, `node_id`, `parent`(허브 ID) 정보가 필요합니다.
+  * **Tuya Zigbee/BLE 장치**: `id`, `node_id`, `parent`(허브 ID) 정보가 필요합니다. `name`은 선택사항 입니다.
     ```json
     {
       "id": "ebed836691xxxxxxb",
@@ -218,4 +218,3 @@ python tuya2mqtt.py debug
   * **네트워크 자원**: Tuya 장치 수가 많아질수록 **수많은 TCP 연결이 `keep-alive` 상태로 유지**됩니다. 이로 인해 라우터 자원에 상당한 부하가 발생할 수 있으니, 충분한 네트워크 자원을 갖춘 라우터를 사용해야 합니다.
   * **MQTT 브로커 환경**: 이 스크립트는 수많은 장치가 연결되고 통신이 빈번해질수록 MQTT 브로커에 부하가 걸릴 수 있습니다. **최대 성능**을 위해 TLS(Transport Layer Security)와 같은 추가적인 보안 기능을 사용하지 않도록 설계되었습니다. 따라서 외부에서 브로커에 직접 접속하는 것을 금지하여 보안을 확보하고, 브로커를 **`localhost`에 직접 운용**하는 것을 권장합니다.
   * **파일 디스크립터**: 스크립트는 시작 시 파일 디스크립터(FD) 제한을 최댓값으로 설정합니다. 이는 많은 장치와의 연결을 동시에 처리하기 위함입니다.
-  * **디바이스 삭제**: 장치를 삭제하는 명령(`delete`)은 해당 장치의 통신 스레드를 종료한 후 리소스를 정리합니다. 만약 장치가 허브에 연결된 서브 디바이스인 경우, 부모 허브의 자식 목록에서도 해당 장치를 제거합니다.
