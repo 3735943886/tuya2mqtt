@@ -169,8 +169,15 @@ To control a device or request its status, publish a payload to the `tuya2mqtt/d
           "data": [1, 2, 3]
         }
         ```
+### 3\. Monitor Devices via MQTT
 
-#### 3\. Daemon Status and Shutdown
+`tuya2mqtt` provides two main topics for device monitoring. By subscribing to these topics, you can get real-time updates on device status changes and command history.
+
+ * `tuya2mqtt/data/command`: This topic is published when a **Tuya device reports a state change on its own.** For example, it publishes instantly when a smart button is pressed or a switch is physically toggled on the device itself.
+
+ * `tuya2mqtt/data/status`: This topic is published as a **response to a command or for periodic status reports.** It's used when you request a status update via the tuya2mqtt/device/get topic or when the script periodically polls the device for its state.
+
+#### 4\. Daemon Status and Shutdown
 
 To query the daemon's status or shut down all device connections, publish a payload to the `tuya2mqtt/device/query` topic.
 
