@@ -212,7 +212,9 @@ To query the daemon's status or shut down all device connections, publish a payl
 
 This script is intentionally streamlined and focused on **robustness**. However, it relies on several external dependencies you should be aware of.
 
-  * **External Module Dependencies**: `tuya2mqtt` relies entirely on the **`tinytuya`** and **`paho-mqtt`** modules. Unexpected updates to these modules can impact the script's stability, so it's recommended to **keep the module versions stable**.
+  * **External Module Dependencies**: `tuya2mqtt` relies entirely on the `tinytuya` and `mqtt` modules. Unexpected updates to these modules can impact the script's stability, so it's recommended to **keep the module versions stable**.
+      * **[tinytuya](https://github.com/jasonacox/tinytuya)**
+      * **[paho-mqtt](https://github.com/eclipse/paho.mqtt.python)**
   * **Network Resources**: As the number of Tuya devices increases, a large number of **TCP connections will be kept alive**. This can put a significant load on your router's resources, so make sure you have a router with sufficient capacity.
   * **MQTT Broker Environment**: As device connections and communication become more frequent, the MQTT broker may experience increased load. For **maximum performance**, this script is designed not to use additional security features like TLS (Transport Layer Security). To ensure security, you should prevent external access to your broker and operate it directly on **`localhost`**.
   * **File Descriptors**: The script sets the maximum file descriptor (FD) limit at startup to handle a large number of concurrent device connections.
