@@ -102,7 +102,7 @@ When you run the script for the first time, a `tuya2mqtt.conf` file will be crea
 
 ### 1\. Add a Device
 
-[Add devices in bulk via tinytuya wizard](README.add.md)
+[Add devices in bulk using tinytuya wizard](README.add.md)
 
 To add a new Tuya device, publish a JSON payload to the `tuya2mqtt/device/add` topic.
 
