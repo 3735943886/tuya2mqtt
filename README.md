@@ -169,7 +169,7 @@ To control a device or request its status, publish a payload to the `tuya2mqtt/d
           "data": [1, 2, 3]
         }
         ```
-### 3\. Monitor Devices via MQTT
+#### 3\. Monitor Devices via MQTT
 
 `tuya2mqtt` provides two main topics for device monitoring. By subscribing to these topics, you can get real-time updates on device status changes and command history.
 
