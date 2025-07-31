@@ -1,13 +1,5 @@
-# Tuya to MQTT Bridge
-[English](README.md) | [한국어](README.ko.md)
-
-**Description:** A Python daemon that bridges Tuya devices to an MQTT broker, enabling real-time control and status monitoring. It's designed for local control, performance, and stability.
-
------
-
-## README.md
-
 # tuya2mqtt: Tuya Devices to MQTT Bridge
+[English](README.md) | [한국어](README.ko.md)
 
 `tuya2mqtt` is a Python script that connects Tuya smart devices to an MQTT broker. **It acts as a backend service that maintains a 24-hour TCP connection with registered Tuya devices, instantly publishing state changes to MQTT and allowing you to control devices via MQTT commands.**
 
