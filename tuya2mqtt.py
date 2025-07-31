@@ -244,6 +244,7 @@ def Terminator(quit):
 
 # CALLER MUST LOCK THE TUYA
 def _cleanup_device(device_id):
+  global TUYA
   if device_id in TUYA['device']['id']:
     device_info = TUYA['device']['id'][device_id]
     if 'name' in device_info and device_info['name'] in TUYA['device']['name']:
