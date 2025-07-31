@@ -5,7 +5,7 @@
 
 -----
 
-### Key Features
+## Key Features
 
   * **Tuya Device Control**: Set the state of your Tuya devices via MQTT.
   * **Status Monitoring**: Receive real-time status updates (DPS) from your Tuya devices and publish them to MQTT.
@@ -16,7 +16,7 @@
 
 -----
 
-### Installation
+## Installation
 
 `tuya2mqtt` requires Python 3.8 or later and the following libraries.
 
@@ -26,11 +26,11 @@ pip install tinytuya paho-mqtt python-daemon
 
 -----
 
-### Usage
+## Usage
 
 The `tuya2mqtt.py` script supports four command modes.
 
-#### Start as a Daemon
+### Start as a Daemon
 
 Run the script as a background daemon. It will continue running even after you close the terminal.
 
@@ -38,7 +38,7 @@ Run the script as a background daemon. It will continue running even after you c
 python tuya2mqtt.py start
 ```
 
-#### Stop the Daemon
+### Stop the Daemon
 
 Safely stop the running daemon.
 
@@ -46,7 +46,7 @@ Safely stop the running daemon.
 python tuya2mqtt.py stop
 ```
 
-#### Restart the Daemon
+### Restart the Daemon
 
 Stop the current daemon instance and start a new one.
 
@@ -54,7 +54,7 @@ Stop the current daemon instance and start a new one.
 python tuya2mqtt.py restart
 ```
 
-#### Run in Debug Mode
+### Run in Debug Mode
 
 Run the script in the foreground with real-time logs printed to the terminal. This is useful for development and troubleshooting.
 
@@ -64,7 +64,7 @@ python tuya2mqtt.py debug
 
 -----
 
-### Configuration
+## Configuration
 
 When you run the script for the first time, a `tuya2mqtt.conf` file will be created automatically. You can edit this file to change your MQTT broker information.
 
@@ -98,9 +98,9 @@ When you run the script for the first time, a `tuya2mqtt.conf` file will be crea
 
 -----
 
-### Managing Devices via MQTT
+## Managing Devices via MQTT
 
-#### 1\. Add a Device
+### 1\. Add a Device
 
 To add a new Tuya device, publish a JSON payload to the `tuya2mqtt/device/add` topic.
 
@@ -124,7 +124,7 @@ To add a new Tuya device, publish a JSON payload to the `tuya2mqtt/device/add` t
     }
     ```
 
-#### 2\. Control and Query Device Status
+### 2\. Control and Query Device Status
 
 To control a device or request its status, publish a payload to the `tuya2mqtt/device/set` or `tuya2mqtt/device/get` topics. **You can specify a device using either its `id` or `name`.**
 
@@ -169,7 +169,7 @@ To control a device or request its status, publish a payload to the `tuya2mqtt/d
           "data": [1, 2, 3]
         }
         ```
-#### 3\. Monitor Devices via MQTT
+### 3\. Monitor Devices via MQTT
 
 `tuya2mqtt` provides two main topics for device monitoring. By subscribing to these topics, you can get real-time updates on device status changes and command history.
 
@@ -177,7 +177,7 @@ To control a device or request its status, publish a payload to the `tuya2mqtt/d
 
  * `tuya2mqtt/data/status`: This topic is published as a **response to a command or for periodic status reports.** It's used when you request a status update via the tuya2mqtt/device/get topic or when the script periodically polls the device for its state.
 
-#### 4\. Daemon Status and Shutdown
+### 4\. Daemon Status and Shutdown
 
 To query the daemon's status or shut down all device connections, publish a payload to the `tuya2mqtt/device/query` topic.
 
@@ -213,7 +213,7 @@ To query the daemon's status or shut down all device connections, publish a payl
 
 -----
 
-### Important Notes & Recommendations
+## Important Notes & Recommendations
 
 This script is intentionally streamlined and focused on **robustness**. However, it relies on several external dependencies you should be aware of.
 
