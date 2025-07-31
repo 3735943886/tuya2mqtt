@@ -1,5 +1,5 @@
 # tuya2mqtt: Tuya Devices to MQTT Bridge
-[장치를 한꺼번에 추가하기](README.add.ko.md) | [English](README.md)
+[English](README.md)
 
 `tuya2mqtt`는 Tuya 스마트 장치를 MQTT 브로커와 연결해 주는 Python 스크립트입니다. **`add` 토픽으로 등록된 Tuya 장치와 24시간 TCP 연결을 유지하여 상태 변화가 발생하면 즉시 MQTT로 발행하고, MQTT를 통해 장치의 상태를 제어할 수 있는 백엔드(backend) 역할을 합니다.**
 
@@ -101,6 +101,8 @@ python tuya2mqtt.py debug
 ## MQTT를 통한 장치 관리
 
 ### 1\. 장치 추가
+
+[tinytuya를 활용하여 장치를 한꺼번에 추가하기](README.add.ko.md)
 
 새로운 Tuya 장치를 추가하려면 `tuya2mqtt/device/add` 토픽에 아래와 같은 JSON 페이로드를 발행하세요.
 
