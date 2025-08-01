@@ -34,15 +34,13 @@ with open('./devices.json', 'r') as f:
     devices = json.load(f)
 
 # 1. Wi-Fi 장치(허브 포함)를 먼저 등록합니다.
-#    'sub' 키가 False인 장치가 Wi-Fi 장치입니다.
 for device in devices:
-    if device['sub'] == False:
+    if 'parent' not in device:
         publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
 
 # 2. 서브 디바이스(Zigbee/BLE)를 나중에 등록합니다.
-#    'sub' 키가 True인 장치가 서브 디바이스입니다.
 for device in devices:
-    if device['sub'] == True:
+    if 'parent' in device:
         publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
 
 print("All devices from devices.json have been sent to tuya2mqtt.")
