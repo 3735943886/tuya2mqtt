@@ -178,6 +178,19 @@ python tuya2mqtt.py debug
   * `tuya2mqtt/data/command`: 이 토픽은 **Tuya 장치가 스스로 상태 변화를 보고할 때** 발행됩니다. 예를 들어, 스마트 버튼을 눌렀을 때, 스위치 상태가 물리적으로 변경되었을 때처럼 장치에서 이벤트가 발생하면 즉시 발행되는 토픽입니다.
   * `tuya2mqtt/data/status`: 이 토픽은 **명령에 대한 응답이나 주기적인 상태 보고**를 위해 발행됩니다. `tuya2mqtt/device/get` 토픽을 통해 상태를 요청했거나, 스크립트가 주기적으로 장치의 상태를 폴링(polling)했을 때 발행됩니다.
 
+해당 토픽을 subscribe하면 다음과 같은 형식으로 데이터를 받을 수 있습니다:
+
+```bash
+$ mosquitto_sub -t tuya2mqtt/data/command
+```
+
+```json
+{"id": "ebed836691xxxxxxb", "name": "My_Smart_Plug", "data": {"1": true}}
+{"id": "ebed836691xxxxxxb", "name": "My_Smart_Plug", "data": {"1": false}}
+```
+
+**`id`** 필드는 Wi-Fi 디바이스의 경우 `id`를, 서브 디바이스의 경우 `node_id`를 나타냅니다.
+
 ### 4\. 데몬 상태 조회 및 종료
 
 데몬의 상태를 조회하거나 연결된 모든 장치를 종료하려면 `tuya2mqtt/device/query` 토픽에 아래 페이로드를 발행합니다.
