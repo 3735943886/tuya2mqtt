@@ -179,6 +179,19 @@ To control a device or request its status, publish a payload to the `tuya2mqtt/d
 
  * `tuya2mqtt/data/status`: This topic is published as a **response to a command or for periodic status reports.** It's used when you request a status update via the tuya2mqtt/device/get topic or when the script periodically polls the device for its state.
 
+You can subscribe to the topic to receive data in this format:
+
+```bash
+$ mosquitto_sub -t tuya2mqtt/data/command
+```
+
+```json
+{"id": "ebed836691xxxxxxb", "name": "My_Smart_Plug", "data": {"1": true}}
+{"id": "ebed836691xxxxxxb", "name": "My_Smart_Plug", "data": {"1": false}}
+```
+
+The **`id`** field represents the `id` for Wi-Fi devices and the `node_id` for sub-devices.
+
 ### 4\. Daemon Status and Shutdown
 
 To query the daemon's status or shut down all device connections, publish a payload to the `tuya2mqtt/device/query` topic.
