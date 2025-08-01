@@ -34,15 +34,13 @@ with open('./devices.json', 'r') as f:
     devices = json.load(f)
 
 # 1. Register Wi-Fi devices (including hubs) first.
-#    'sub' is False for Wi-Fi devices.
 for device in devices:
-    if device['sub'] == False:
+    if 'parent' not in device:
         publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
 
 # 2. Register sub-devices (Zigbee/BLE) next.
-#    'sub' is True for sub-devices.
 for device in devices:
-    if device['sub'] == True:
+    if 'parent' in device:
         publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
 
 print("All devices from devices.json have been sent to tuya2mqtt.")
