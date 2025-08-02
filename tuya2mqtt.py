@@ -58,7 +58,6 @@ def OnConnectMqtt(client, userdata, flags, reason_code, properties):
     client.subscribe(MQTT['topic']['subscribe'][topics])
     MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Topic subscribed: {}'.format(MQTT['topic']['subscribe'][topics]))
 
-
 def ReloadConf():
   global MQTT, CONF_FILE
   try:
@@ -66,7 +65,6 @@ def ReloadConf():
   except:
     with open(CONF_FILE, 'w') as f:
       json.dump({key: value for key, value in MQTT.items() if key != 'client'}, f, indent = 2)
-
 
 def RecvTopic(client, user, msg):
   global DAEMON_STAT, MQTT, TUYA
@@ -91,11 +89,13 @@ def RecvTopic(client, user, msg):
             parent = TUYA['device']['id'][payload['parent']]['device']
             added = tinytuya.Device(dev_id = payload['id'], cid = payload['node_id'], parent = parent)
             TUYA['device']['id'][payload['node_id']] = { 'device': added, 'parent': payload['parent'] }
-            TUYA['device']['id'][payload['parent']]['children'].append(payload['node_id'])
+            if payload['node_id'] not in TUYA['device']['id'][payload['parent']]['children']:
+              TUYA['device']['id'][payload['parent']]['children'].append(payload['node_id'])
             if 'name' in payload:
               TUYA['device']['id'][payload['node_id']]['name'] = payload['name']
               if payload['name'] in TUYA['device']['name']:
-                TUYA['device']['name'][payload['name']].append(payload['node_id'])
+                if payload['node_id'] not in TUYA['device']['name'][payload['name']]:
+                  TUYA['device']['name'][payload['name']].append(payload['node_id'])
               else:
                 TUYA['device']['name'][payload['name']] = [payload['node_id']]
           elif 'id' in payload and payload['id'] not in TUYA['device']['id']:
@@ -108,7 +108,8 @@ def RecvTopic(client, user, msg):
             if 'name' in payload:
               TUYA['device']['id'][payload['id']]['name'] = payload['name']
               if payload['name'] in TUYA['device']['name']:
-                TUYA['device']['name'][payload['name']].append(payload['id'])
+                if payload['id'] not in TUYA['device']['name'][payload['name']]:
+                  TUYA['device']['name'][payload['name']].append(payload['id'])
               else:
                 TUYA['device']['name'][payload['name']] = [payload['id']]
       except Exception as e:
