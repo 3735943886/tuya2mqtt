@@ -121,14 +121,28 @@ def RecvTopic(client, user, msg):
 
   elif msg.topic == MQTT['topic']['subscribe']['delete']:
     for payload in payloads:
-      with TUYA['lock']:
-        if 'id' in payload and payload['id'] in TUYA['device']['id']:
-          if 'thread' in TUYA['device']['id'][payload['id']]:
-            TUYA['device']['id'][payload['id']]['running'] = False
-          else:
-            TUYA['device']['id'][TUYA['device']['id'][payload['id']]['parent']]['children'].remove(payload['id'])
-            _cleanup_device(payload['id'])
-      MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Device deleted: {}'.format(payload['id']))
+      try:
+        target_devices = []
+        with TUYA['lock']:
+          if 'id' in payload:
+            target_devices.append(payload['id'])
+          elif 'name' in payload:
+            for device_id in TUYA['device']['name'][payload['name']]:
+              target_devices.append(device_id)
+        for target_device in target_devices:
+          with TUYA['lock']:
+            if target_device in TUYA['device']['id']:
+              if 'thread' in TUYA['device']['id'][target_device]:
+                TUYA['device']['id'][target_device]['running'] = False
+              else:
+                try:
+                  TUYA['device']['id'][TUYA['device']['id'][target_device]['parent']]['children'].remove(target_device)
+                except:
+                  pass
+                _cleanup_device(target_device)
+          MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Device deleted {}'.format(target_device))
+      except Exception as e:
+        MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = traceback.format_exc())
 
   elif msg.topic == MQTT['topic']['subscribe']['set']:
     for payload in payloads:
