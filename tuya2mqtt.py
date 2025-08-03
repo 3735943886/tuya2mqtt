@@ -210,13 +210,12 @@ def RecvTopic(client, user, msg):
           'tuya2mqtt': DAEMON_STAT['version'],
           'uptime(min)': int((datetime.now() - DAEMON_STAT['start_time']).total_seconds() / 60),
           'mqtt_broker': MQTT['broker']['host'],
-          'connected_devices_count': 0,
+          'connected_devices_count': len(TUYA['device']['id']),
           'devices': []
         }
         with TUYA['lock']:
           for device_id, device_info in TUYA['device']['id'].items():
             if 'thread' in device_info:
-              daemon_status['connected_devices_count'] += 1
               device_entry = {
                 'id': device_id,
                 'name': device_info.get('name', 'N/A'),
