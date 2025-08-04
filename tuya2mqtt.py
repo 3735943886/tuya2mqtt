@@ -219,16 +219,18 @@ def RecvTopic(client, user, msg):
               device_entry = {
                 'id': device_id,
                 'name': device_info.get('name', 'N/A'),
-                'running': device_info.get('running', False),
-                'children_count': len(device_info.get('children', []))
+                'type': 'WiFi device'
               }
+              children_count = len(device_info.get('children', []))
+              if children_count != 0:
+                device_entry['children_count'] = children_count
               daemon_status['devices'].append(device_entry)
             else:
               device_entry = {
                 'id': device_id,
                 'name': device_info.get('name', 'N/A'),
                 'parent': device_info.get('parent', 'N/A'),
-                'type': 'sub_device'
+                'type': 'sub device'
               }
               daemon_status['devices'].append(device_entry)
 
@@ -306,7 +308,7 @@ def TuyaReceiver(payload):
 
         if 'Error' in data:
           # Connection error
-          MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = str(data))
+          MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = json.dumps({'id': payload['id'], **data}))
 
           # TinyTuya does automatically reconnect.
           # Devices can sometimes take a while to re-connect to the WiFi, so if you get that error you can just wait a bit and retry the send/receive.
