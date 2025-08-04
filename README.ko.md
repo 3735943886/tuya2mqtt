@@ -2,7 +2,8 @@
 [English](README.md)
 
 `tuya2mqtt`는 Tuya 스마트 장치를 MQTT 브로커와 연결해 주는 Python 스크립트입니다. **`add` 토픽으로 등록된 Tuya 장치와 24시간 TCP 연결을 유지하여 상태 변화가 발생하면 즉시 MQTT로 발행하고, MQTT를 통해 장치의 상태를 제어할 수 있는 백엔드(backend) 역할을 합니다.**
-
+`tuya2mqtt`는 오버헤드와 종속성을 최소화하여 성능을 극대화하기 위해 컨테이너 대신 `python-daemon`으로 데모나이즈되었습니다.
+>
 -----
 
 ## 주요 기능
