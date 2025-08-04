@@ -2,6 +2,7 @@
 [한국어](README.ko.md)
 
 `tuya2mqtt` is a Python script that connects Tuya smart devices to an MQTT broker. **It acts as a backend service that maintains a 24-hour TCP connection with registered Tuya devices, instantly publishing state changes to MQTT and allowing you to control devices via MQTT commands.**
+`tuya2mqtt` is daemonized with `python-daemon` to run as a robust and lightweight background process, minimizing overhead and dependencies to maximize performance over a containerized solution.
 
 -----
 
