@@ -28,40 +28,34 @@ pip install tinytuya paho-mqtt python-daemon
 -----
 
 ## 사용법
+### **Daemon 모드 (기본)**
 
-`tuya2mqtt.py` 스크립트는 네 가지 명령 모드를 지원합니다.
+* **시작:** 스크립트를 백그라운드 데몬으로 실행합니다. 터미널을 닫아도 계속 실행됩니다.
+    ```sh
+    python tuya2mqtt.py start
+    ```
 
-### 데몬으로 시작하기
+* **중지:** 실행 중인 데몬을 안전하게 중지합니다.
+    ```sh
+    python tuya2mqtt.py stop
+    ```
 
-스크립트를 백그라운드에서 데몬으로 실행합니다. 터미널을 닫아도 계속 실행됩니다.
+* **재시작:** 현재 데몬을 중지하고 새 인스턴스를 시작합니다.
+    ```sh
+    python tuya2mqtt.py restart
+    ```
 
-```sh
-python tuya2mqtt.py start
-```
+### **포그라운드 및 디버그 모드 (전문가용)**
 
-### 데몬 종료하기
+* **포그라운드:** 포그라운드 모드로  실행합니다. **systemd**와 같은 서비스 관리자와 함께 사용하기에 유용합니다.
+    ```sh
+    python tuya2mqtt.py foreground
+    ```
 
-실행 중인 데몬을 안전하게 종료합니다.
-
-```sh
-python tuya2mqtt.py stop
-```
-
-### 데몬 재시작하기
-
-실행 중인 데몬을 종료한 후 다시 시작합니다.
-
-```sh
-python tuya2mqtt.py restart
-```
-
-### 디버그 모드로 실행하기
-
-디버그 모드로 실행하면 터미널에 로그가 실시간으로 출력됩니다. 개발 및 문제 해결에 유용합니다.
-
-```sh
-python tuya2mqtt.py debug
-```
+* **디버그:** 포그라운드 모드로 실행하며, 실시간 로그를 터미널에 출력합니다. **개발** 및 **문제 해결**에 사용하기 좋습니다.
+    ```sh
+    python tuya2mqtt.py debug
+    ```
 
 -----
 
