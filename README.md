@@ -124,7 +124,7 @@ To add a new Tuya device, publish a JSON payload to the `tuya2mqtt/device/add` t
 
 ### 2\. Control and Query Device Status
 
-To control a device or request its status, publish a payload to the `tuya2mqtt/device/set` or `tuya2mqtt/device/get` topics. **You can specify a device using either its `id` or `name`.**
+To control a device or request its status, publish a payload to the `tuya2mqtt/device/set` or `tuya2mqtt/device/get` topics. **A device can be specified by either its `id` or `name`.**
 
   * **Set State**: Publish a JSON payload with `data` (DPS) to the `tuya2mqtt/device/set` topic.
       * Using `id`:
