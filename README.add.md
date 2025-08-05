@@ -27,6 +27,7 @@ You can use the following Python script to automate this process.
 
 ```python
 import json
+import time
 from paho.mqtt import publish
 
 # Load the devices.json file created by the tinytuya wizard
@@ -37,6 +38,9 @@ with open('./devices.json', 'r') as f:
 for device in devices:
     if 'node_id' not in device or device['node_id'] is '':
         publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
+
+# Wait for a few seconds to allow the hub to initialize.
+time.sleep(5)
 
 # 2. Register sub-devices (Zigbee/BLE) next.
 for device in devices:
