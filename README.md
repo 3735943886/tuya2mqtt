@@ -1,15 +1,15 @@
 # tuya2mqtt: Tuya Devices to MQTT Bridge
 [한국어](README.ko.md)
 
-`tuya2mqtt` is a Python script that connects Tuya smart devices to an MQTT broker. **It acts as a backend service that maintains a 24-hour TCP connection with registered Tuya devices, instantly publishing state changes to MQTT and allowing you to control devices via MQTT commands.**
+`tuya2mqtt` is a Python script that connects Tuya smart devices to an MQTT broker. **It acts as a backend service that maintains a 24-hour TCP connection with registered Tuya devices. This allows it to instantly publish state changes to MQTT and enable device control via MQTT commands.**
 `tuya2mqtt` is daemonized with `python-daemon` to run as a robust and lightweight background process, minimizing overhead and dependencies to maximize performance over a containerized solution.
 
 -----
 
 ## Key Features
 
-  * **Tuya Device Control**: Set the state of your Tuya devices via MQTT.
-  * **Status Monitoring**: Receive real-time status updates (DPS) from your Tuya devices and publish them to MQTT.
+  * **Tuya Device Control**: Device state can be set via MQTT.
+  * **Status Monitoring**: Real-time status updates (DPS) are received from Tuya devices and published to MQTT.
   * **Multithreading**: Each device is handled in a separate thread for stable, concurrent communication.
   * **Daemon Mode**: Runs reliably in the background, with PID file management to prevent multiple instances.
   * **Dynamic Device Management**: Add or remove devices on the fly using MQTT commands.
@@ -31,7 +31,7 @@ pip install tinytuya paho-mqtt python-daemon
 
 ### **Daemon Mode (default)**
 
-* **Start:** Run the script as a background daemon. It will continue running even after you close the terminal.
+* **Start:** Run the script as a background daemon.
     ```sh
     python tuya2mqtt.py start
     ```
@@ -169,13 +169,13 @@ To control a device or request its status, publish a payload to the `tuya2mqtt/d
         ```
 ### 3\. Monitor Devices via MQTT
 
-`tuya2mqtt` provides two main topics for device monitoring. By subscribing to these topics, you can get real-time updates on device status changes and command history.
+`tuya2mqtt` provides two main topics for device monitoring. By subscribing to these topics, real-time updates on device status changes and command history can be obtained.
 
- * `tuya2mqtt/data/command`: This topic is published when a **Tuya device reports a state change on its own.** For example, it publishes instantly when a smart button is pressed or a switch is physically toggled on the device itself.
+* `tuya2mqtt/data/command`: This topic is published when a **Tuya device reports a state change on its own.** For example, it publishes instantly when a smart button is pressed or a switch is physically toggled on the device itself.
 
- * `tuya2mqtt/data/status`: This topic is published as a **response to a command or for periodic status reports.** It's used when you request a status update via the tuya2mqtt/device/get topic or when the script periodically polls the device for its state.
+* `tuya2mqtt/data/status`: This topic is published as a **response to a command or for periodic status reports.** It is used when a status update is requested via the `tuya2mqtt/device/get` topic or when the script periodically polls the device for its state.
 
-You can subscribe to the topic to receive data in this format:
+Data can be received in this format by subscribing to the topic:
 
 ```bash
 $ mosquitto_sub -t tuya2mqtt/data/command
@@ -210,7 +210,7 @@ To query the daemon's status or shut down all device connections, publish a payl
     }
     ```
 
-    This command terminates communication with all currently connected devices. The daemon process itself remains active, but you must use the `add` command to reconnect devices.
+    This command terminates communication with all currently connected devices. The daemon process itself remains active, but the `add` command must be used to reconnect devices.
 
   * **Terminate All Connections and Shut Down Daemon**:
 
@@ -226,11 +226,11 @@ To query the daemon's status or shut down all device connections, publish a payl
 
 ## Important Notes & Recommendations
 
-This script is intentionally streamlined and focused on **robustness**. However, it relies on several external dependencies you should be aware of.
+This script is intentionally streamlined and focused on **robustness**. However, it relies on several external dependencies.
 
-  * **External Module Dependencies**: `tuya2mqtt` relies entirely on the `tinytuya` and `mqtt` modules. Unexpected updates to these modules can impact the script's stability, so it's recommended to **keep the module versions stable**.
-      * **[tinytuya](https://github.com/jasonacox/tinytuya)**
-      * **[paho-mqtt](https://github.com/eclipse/paho.mqtt.python)**
-  * **Network Resources**: As the number of Tuya devices increases, a large number of **TCP connections will be kept alive**. This can put a significant load on your router's resources, so make sure you have a router with sufficient capacity.
-  * **MQTT Broker Environment**: As device connections and communication become more frequent, the MQTT broker may experience increased load. For **maximum performance**, this script is designed not to use additional security features like TLS (Transport Layer Security). To ensure security, you should prevent external access to your broker and operate it directly on **`localhost`**.
+  * **External Module Dependencies**: `tuya2mqtt` relies entirely on the `tinytuya` and `paho-mqtt` modules. Unexpected updates to these modules can impact the script's stability, so keeping the module versions stable is recommended.
+    * **[tinytuya](https://github.com/jasonacox/tinytuya)**
+    * **[paho-mqtt](https://github.com/eclipse/paho.mqtt.python)**
+  * **Network Resources**: As the number of Tuya devices increases, a large number of **TCP connections will be kept alive**. This can put a significant load on a router's resources, so a router with sufficient capacity should be used.
+  * **MQTT Broker Environment**: As device connections and communication become more frequent, the MQTT broker may experience increased load. For **maximum performance**, this script is designed not to use additional security features like TLS. To ensure security, external access to the broker should be prevented and it should be operated directly on `localhost`.
   * **File Descriptors**: The script sets the maximum file descriptor (FD) limit at startup to handle a large number of concurrent device connections.
