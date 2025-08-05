@@ -29,7 +29,7 @@ pip install tinytuya paho-mqtt python-daemon
 
 ## Usage
 
-### **Daemon Mode (recommended)**
+### **Daemon Mode (default)**
 
 * **Start:** Run the script as a background daemon. It will continue running even after you close the terminal.
     ```sh
@@ -85,6 +85,7 @@ When you run the script for the first time, a `tuya2mqtt.conf` file will be crea
       "status": "tuya2mqtt/data/status",
       "daemon": "tuya2mqtt/log/daemon",
       "info": "tuya2mqtt/log/info",
+      "debug": "tuya2mqtt/log/debug",
       "error": "tuya2mqtt/log/error"
     }
   }
