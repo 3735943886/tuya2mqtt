@@ -14,6 +14,7 @@ import daemon
 import traceback
 from daemon import pidfile
 
+FOREGROUND = False
 CONF_FILE = None
 DAEMON_STAT = {
   'version': '1.0',
@@ -38,6 +39,7 @@ MQTT = {
       'command': f'{ROOT_TOPIC}/data/command',
       'status': f'{ROOT_TOPIC}/data/status',
       'daemon': f'{ROOT_TOPIC}/log/daemon',
+      'debug': f'{ROOT_TOPIC}/log/debug',
       'info': f'{ROOT_TOPIC}/log/info',
       'error': f'{ROOT_TOPIC}/log/error',
     },
@@ -51,12 +53,22 @@ TUYA = {
   'lock': threading.Lock(),
 }
 
+def logging(category, message):
+  global FOREGROUND
+
+  if FOREGROUND:
+    if category == 'error':
+      sys.stderr.write(message)
+    else:
+      print(f'{category} - {message}')
+  else:
+    MQTT['client'].publish(topic = MQTT['topic']['publish'][category], payload = message)
 
 def OnConnectMqtt(client, userdata, flags, reason_code, properties):
   global MQTT
   for topics in MQTT['topic']['subscribe']:
     client.subscribe(MQTT['topic']['subscribe'][topics])
-    MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Topic subscribed: {}'.format(MQTT['topic']['subscribe'][topics]))
+    logging('info', 'Topic subscribed: {}'.format(MQTT['topic']['subscribe'][topics]))
 
 def ReloadConf():
   global MQTT, CONF_FILE
@@ -70,10 +82,10 @@ def RecvTopic(client, user, msg):
   global DAEMON_STAT, MQTT, TUYA
 
   try:
-    MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Topic: {}, Payload: {}'.format(msg.topic, msg.payload.decode('utf-8')))
+    logging('info', 'Topic: {}, Payload: {}'.format(msg.topic, msg.payload.decode('utf-8')))
     payloads = json.loads(msg.payload.decode('utf-8'))
   except Exception as e:
-    MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = traceback.format_exc())
+    logging('error', traceback.format_exc())
     return
 
   if type(payloads) != type([]):
@@ -113,7 +125,7 @@ def RecvTopic(client, user, msg):
               else:
                 TUYA['device']['name'][payload['name']] = [payload['id']]
       except Exception as e:
-        MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = traceback.format_exc())
+        logging('error', traceback.format_exc())
         added = None
       if added is not None:
         if isinstance(added, threading.Thread):
@@ -140,9 +152,9 @@ def RecvTopic(client, user, msg):
                 except:
                   pass
                 _cleanup_device(target_device)
-          MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Device deleted {}'.format(target_device))
+          logging('info', 'Device deleted {}'.format(target_device))
       except Exception as e:
-        MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = traceback.format_exc())
+        logging('error', traceback.format_exc())
 
   elif msg.topic == MQTT['topic']['subscribe']['set']:
     for payload in payloads:
@@ -156,9 +168,9 @@ def RecvTopic(client, user, msg):
               target_devices.append(TUYA['device']['id'][device_id]['device'])
         for target_device in target_devices:
           target_device.set_multiple_values(payload['data'], nowait = True)
-        MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Data set')
+        logging('info', 'Data set')
       except Exception as e:
-        MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = traceback.format_exc())
+        logging('error', traceback.format_exc())
 
   elif msg.topic == MQTT['topic']['subscribe']['get']:
     for payload in payloads:
@@ -172,9 +184,9 @@ def RecvTopic(client, user, msg):
               target_devices.append(TUYA['device']['id'][device_id]['device'])
         for target_device in target_devices:
           target_device.status(nowait = True)
-        MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Status requested')
+        logging('info', 'Status requested')
       except Exception as e:
-        MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = traceback.format_exc())
+        logging('error', traceback.format_exc())
 
   elif msg.topic == MQTT['topic']['subscribe']['send']:
     for payload in payloads:
@@ -190,9 +202,9 @@ def RecvTopic(client, user, msg):
           for target_device in target_devices:
             target_payload = target_device.generate_payload(payload['command'], payload['data'])
             target_device.send(target_payload)
-          MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Payload sent')
+          logging('info', 'Payload sent')
       except Exception as e:
-        MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = traceback.format_exc())
+        logging('error', traceback.format_exc())
 
   elif msg.topic == MQTT['topic']['subscribe']['query']:
     for payload in payloads:
@@ -219,10 +231,11 @@ def RecvTopic(client, user, msg):
               device_entry = {
                 'id': device_id,
                 'name': device_info.get('name', 'N/A'),
-                'type': 'WiFi device'
+                'type': 'end device'
               }
               children_count = len(device_info.get('children', []))
               if children_count != 0:
+                device_entry['type'] = 'hub device'
                 device_entry['children_count'] = children_count
               daemon_status['devices'].append(device_entry)
             else:
@@ -235,12 +248,12 @@ def RecvTopic(client, user, msg):
               daemon_status['devices'].append(device_entry)
 
         MQTT['client'].publish(topic = MQTT['topic']['publish']['daemon'], payload = json.dumps(daemon_status, ensure_ascii = False))
-        MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Daemon status requested and published.')
+        logging('info', 'Daemon status requested and published.')
 
 
 def Terminator(quit):
   global MQTT, TUYA
-  MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Process stop requested')
+  logging('info', 'Process stop requested')
   threads_to_join = []
   with TUYA['lock']:
     for device_id in list(TUYA['device']['id'].keys()):
@@ -251,11 +264,11 @@ def Terminator(quit):
     thread.join()
   if quit:
     if MQTT['client']:
-      MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Process exited')
+      logging('info', 'Process exited')
       MQTT['client'].disconnect()
       MQTT['client'].loop_stop()
   else:
-    MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Connection reset')
+    logging('info', 'Connection reset')
 
 
 # CALLER MUST LOCK THE TUYA
@@ -308,7 +321,7 @@ def TuyaReceiver(payload):
 
         if 'Error' in data:
           # Connection error
-          MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = json.dumps({'id': payload['id'], **data}))
+          logging('error', json.dumps({'id': payload['id'], **data}))
 
           # TinyTuya does automatically reconnect.
           # Devices can sometimes take a while to re-connect to the WiFi, so if you get that error you can just wait a bit and retry the send/receive.
@@ -333,10 +346,10 @@ def TuyaReceiver(payload):
                   name = TUYA['device']['id'][cid]['name']
             MQTT['client'].publish(topic = topic, payload = json.dumps({'id': cid, 'name': name, 'data': data['dps']}, ensure_ascii = False))
 
-    MQTT['client'].publish(topic = MQTT['topic']['publish']['info'], payload = 'Thread exited: {}'.format(payload['id']))
+    logging('info', 'Thread exited: {}'.format(payload['id']))
 
   except Exception as e:
-    MQTT['client'].publish(topic = MQTT['topic']['publish']['error'], payload = 'Thread terminated with exception: {}'.format(traceback.format_exc()))
+    logging('error', 'Thread terminated with exception: {}'.format(traceback.format_exc()))
 
   finally:
     if device:
@@ -392,8 +405,10 @@ if __name__ == "__main__":
     elif sys.argv[1].lower() == 'restart':
       LAUNCH_MODE = 2
 
-    elif sys.argv[1].lower() == 'debug':
-      tinytuya.set_debug(True)
+    elif sys.argv[1].lower() in ('debug', 'foreground'):
+      if sys.argv[1].lower() == 'debug':
+        tinytuya.set_debug(True)
+      FOREGROUND = True
       start()
       exit()
 
