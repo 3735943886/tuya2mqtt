@@ -27,6 +27,7 @@ python -m tinytuya wizard
 
 ```python
 import json
+import time
 from paho.mqtt import publish
 
 # tinytuya wizard로 생성된 devices.json 파일을 불러옵니다.
@@ -37,6 +38,9 @@ with open('./devices.json', 'r') as f:
 for device in devices:
     if 'node_id' not in device or device['node_id'] is '':
         publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
+
+# 허브 초기화가 완료 되기를 기다립니다.
+time.sleep(5)
 
 # 2. 서브 디바이스(Zigbee/BLE)를 나중에 등록합니다.
 for device in devices:
