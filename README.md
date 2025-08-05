@@ -29,40 +29,34 @@ pip install tinytuya paho-mqtt python-daemon
 
 ## Usage
 
-The `tuya2mqtt.py` script supports four command modes.
+### **Daemon Mode (recommended)**
 
-### Start as a Daemon
+* **Start:** Run the script as a background daemon. It will continue running even after you close the terminal.
+    ```sh
+    python tuya2mqtt.py start
+    ```
 
-Run the script as a background daemon. It will continue running even after you close the terminal.
+* **Stop:** Safely stop the running daemon.
+    ```sh
+    python tuya2mqtt.py stop
+    ```
 
-```sh
-python tuya2mqtt.py start
-```
+* **Restart:** Stop the current daemon instance and start a new one.
+    ```sh
+    python tuya2mqtt.py restart
+    ```
 
-### Stop the Daemon
+### **Foreground and Debug Mode (advanced)**
 
-Safely stop the running daemon.
+* **Foreground:** Run the script in the foreground. Useful for use with service managers like **systemd**.
+    ```sh
+    python tuya2mqtt.py foreground
+    ```
 
-```sh
-python tuya2mqtt.py stop
-```
-
-### Restart the Daemon
-
-Stop the current daemon instance and start a new one.
-
-```sh
-python tuya2mqtt.py restart
-```
-
-### Run in Debug Mode
-
-Run the script in the foreground with real-time logs printed to the terminal. This is useful for development and troubleshooting.
-
-```sh
-python tuya2mqtt.py debug
-```
-
+* **Debug:** Run the script in the foreground with real-time debug logs enabled. Useful for **development** and **troubleshooting**.
+    ```sh
+    python tuya2mqtt.py debug
+    ```
 -----
 
 ## Configuration
