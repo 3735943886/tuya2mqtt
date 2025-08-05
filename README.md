@@ -61,7 +61,7 @@ pip install tinytuya paho-mqtt python-daemon
 
 ## Configuration
 
-When you run the script for the first time, a `tuya2mqtt.conf` file will be created automatically. You can edit this file to change your MQTT broker information.
+Running the script for the first time will automatically create a tuya2mqtt.conf file. This file can be edited to change the MQTT broker information.
 
 **`tuya2mqtt.conf` Example:**
 
