@@ -55,4 +55,4 @@ print("All devices from devices.json have been sent to tuya2mqtt.")
 이제 장치가 모두 등록되었으니, MQTT를 통해 장치를 모니터링하고 제어할 수 있습니다.
 
   * **장치 상태 모니터링**: `tuya2mqtt/data/command`와 `tuya2mqtt/data/status` 토픽을 subscribe하여 Tuya 장치의 실시간 업데이트를 받을 수 있습니다.
-  * **장치 제어**: `tuya2mqtt/device/set` 및 `tuya2mqtt/device/get` 토픽을 사용해 특정 장치에 명령을 보내거나 현재 상태를 확인할 수 있습니다.
+  * **장치 제어**: `tuya2mqtt/device/set` 및 `tuya2mqtt/device/get` 토픽을 사용해 특정 장치에 명령을 보내거나 현재 상태를 요청할 수 있습니다.
