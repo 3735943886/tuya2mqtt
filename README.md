@@ -172,7 +172,6 @@ To control a device or request its status, publish a payload to the `tuya2mqtt/d
 `tuya2mqtt` provides two main topics for device monitoring. By subscribing to these topics, real-time updates on device status changes and command history can be obtained.
 
 * `tuya2mqtt/data/command`: This topic is used for instant updates. It publishes when **a Tuya device reports a state change on its own**, like when a smart button is pressed or a switch is physically toggled.
-
 * `tuya2mqtt/data/status`: This topic is for status reports. It publishes in **response to a `tuya2mqtt/device/get`** or as a part of a periodic device status check.
 
 Data can be received in this format by subscribing to the topic:
