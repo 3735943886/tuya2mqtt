@@ -173,7 +173,7 @@ To control a device or request its status, publish a payload to the `tuya2mqtt/d
 
 * `tuya2mqtt/data/command`: This topic is published when a **response to a `tuya2mqtt/device/set` or Tuya device reports a state change on its own.** For example, it publishes instantly when a smart button is pressed or a switch is physically toggled on the device itself.
 
-* `tuya2mqtt/data/status`: This topic is published as a **response to a `tuya2mqtt/device/get` or for periodic status reports.** It is used when a status update is requested via the `tuya2mqtt/device/get` topic or when the script periodically polls the device for its state.
+* `tuya2mqtt/data/status`: This topic is published as a **response to a `tuya2mqtt/device/get` or for periodic status reports.** It is used to know current status of devices or when the script periodically polls the device for its state.
 
 Data can be received in this format by subscribing to the topic:
 
