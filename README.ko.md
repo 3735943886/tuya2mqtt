@@ -172,7 +172,7 @@ pip install tinytuya paho-mqtt python-daemon
 `tuya2mqtt`는 장치 모니터링을 위해 두 가지 주요 토픽을 제공합니다. 이 토픽들을 subscribe하면 장치의 상태 변화와 명령 이력을 실시간으로 확인할 수 있습니다.
 
   * `tuya2mqtt/data/command`: 이 토픽은 **Tuya 장치가 스스로 상태 변화를 보고할 때** 발행됩니다. 예를 들어, 스마트 버튼을 눌렀을 때, 스위치 상태가 물리적으로 변경되었을 때처럼 장치에서 이벤트가 발생하면 즉시 발행되는 토픽입니다.
-  * `tuya2mqtt/data/status`: 이 토픽은 **명령에 대한 응답이나 주기적인 상태 보고**를 위해 발행됩니다. `tuya2mqtt/device/get` 토픽을 통해 상태를 요청했거나, 스크립트가 주기적으로 장치의 상태를 폴링(polling)했을 때 발행됩니다.
+  * `tuya2mqtt/data/status`: 이 토픽은 **`tuya2mqtt/device/get` 토픽 대한 응답이나 주기적인 상태 보고**를 위해 발행됩니다.
 
 해당 토픽을 subscribe하면 다음과 같은 형식으로 데이터를 받을 수 있습니다:
 
