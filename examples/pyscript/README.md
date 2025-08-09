@@ -12,7 +12,7 @@ The script operates in a clear, step-by-step process:
 
 2.  **Load Device Definitions**: It reads the `devices.json` file, which contains detailed information about your Tuya devices, including their ID, name, model, and a `mapping` dictionary that defines their functions (known as Data Points or DPs).
 
-3.  **Communicate with Tuya2MQTT Bridge**:
+3.  **Communicate with tuya2mqtt Bridge**:
     * **On Add**: It publishes the device's full data to the `tuya2mqtt/device/add` topic. This tells the bridge to start listening to and managing the device.
     * **On Delete**: It publishes the device's ID to the `tuya2mqtt/device/delete` topic to cease management.
 
@@ -40,7 +40,7 @@ The process involves a coordinated handshake between two functions, arbitrated b
 
 2.  **Waiting for a Reply**: Immediately after sending the request, the script begins waiting for a message to arrive in an internal communication channel, `tuya2mqtt_queue`.
 
-3.  **Daemon's Response**: The `Tuya2MQTT` daemon, which is listening on the `query` topic, receives the request and publishes its status information back to a different topic: `tuya2mqtt/log/daemon`.
+3.  **Daemon's Response**: The `tuya2mqtt` daemon, which is listening on the `query` topic, receives the request and publishes its status information back to a different topic: `tuya2mqtt/log/daemon`.
 
 4.  **Receiving and Forwarding**: The `daemon_recv` function, which is decorated with an `@mqtt_trigger` for the `log` topic, automatically executes upon receiving the daemon's response. It takes this payload and immediately places it into the `tuya2mqtt_queue`.
 
