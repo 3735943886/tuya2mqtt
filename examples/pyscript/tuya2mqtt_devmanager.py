@@ -8,6 +8,7 @@ COMMAND_TOPIC_BASE = f'{BASE_TOPIC}/tuya2mqtt/command'
 ADD_TOPIC = 'tuya2mqtt/device/add'
 DEL_TOPIC = 'tuya2mqtt/device/delete'
 GET_TOPIC = 'tuya2mqtt/device/get'
+SET_TOPIC = 'tuya2mqtt/device/set'
 MANUFACTURER = 'Tuya2MQTT (3735943886)'
 EXCLUDED_CATEGORIES = None
 
@@ -29,6 +30,18 @@ CUSTOMIZATIONS: Dict[str, Dict[str, Any]] = {
             "values": {"unit": "%", "min": 0, "max": 100, "step": 1}
         }
     }
+}
+
+# --- Topic ---
+TUYA2MQTT_TOPIC = {
+    'listener': {
+        'trigger': 'tuya2mqtt/data/#',
+        'publish': STATE_TOPIC_BASE + '/{}_{}',
+    },
+    'translater': {
+        'trigger': f'{COMMAND_TOPIC_BASE}/#',
+        'publish': SET_TOPIC,
+    },
 }
 
 # --- Helper Functions for Processing Mappings ---
@@ -251,3 +264,54 @@ def device_open(file):
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         return {'error': e}
+
+
+@mqtt_trigger(TUYA2MQTT_TOPIC['listener']['trigger'])
+def tuya2mqtt_listener(**kwargs):
+    global TUYA2MQTT_TOPIC
+    if 'topic' in kwargs and 'payload_obj' in kwargs:
+        if 'command' in kwargs['topic'] or 'status' in kwargs['topic']:
+            if 'data' in kwargs['payload_obj']:
+                for data in kwargs['payload_obj']['data']:
+                    payload = kwargs['payload_obj']['data'][data]
+                    if 'command' in kwargs['topic']:
+                        event.fire('tuya2mqtt_command_event', id = kwargs['payload_obj']['id'], name = kwargs['payload_obj']['name'], key = data, value = payload)
+                        if payload == 'remote_control':
+                            # SET BACK TO WIRELESS_SWITCH MODE IN CASE OF SWICHING TO REMOTE_CONTROL MODE
+                            mqtt.publish(topic = TUYA2MQTT_TOPIC['translater']['publish'], payload = json.dumps([{'id': kwargs['payload_obj']['id'], 'data': {data: 'wireless_switch'}}]))
+                        if payload in ('single_click', 'double_click', 'long_press'):
+                            # MUST BE SET AS EVENT_TYPE FOR TUYA SCENE BUTTONS
+                            payload = json.dumps({ 'event_type': payload })
+                    else:
+                        if payload in ('single_click', 'double_click', 'long_press'):
+                            # IGNORE BUTTON EVENT IF STATUS TOPIC RECEIVED
+                            continue
+                    mqtt.publish(topic = TUYA2MQTT_TOPIC['listener']['publish'].format(kwargs['payload_obj']['id'], data), payload = payload, retain = True)
+
+
+@mqtt_trigger(TUYA2MQTT_TOPIC['translater']['trigger'])
+def tuya2mqtt_translater(**kwargs):
+    global TUYA2MQTT_TOPIC
+    if 'topic' in kwargs:
+        items = kwargs['topic'].split('/')
+        ids = items[3].split('_')
+        payload = _auto_type_convert(kwargs['payload'])
+        mqtt.publish(topic = TUYA2MQTT_TOPIC['translater']['publish'], payload = json.dumps([{'id': ids[0], 'data': {ids[1]: payload}}]))
+
+
+@pyscript_compile
+def _auto_type_convert(value_str):
+    if isinstance(value_str, str):
+        lower_str = value_str.lower()
+        if lower_str == 'true':
+            return True
+        if lower_str == 'false':
+            return False
+    try:
+        return int(value_str)
+    except ValueError:
+        try:
+            return float(value_str)
+        except ValueError:
+            pass
+    return value_str
