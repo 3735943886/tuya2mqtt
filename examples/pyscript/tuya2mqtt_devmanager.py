@@ -300,18 +300,20 @@ def tuya2mqtt_translater(**kwargs):
 
 
 @pyscript_compile
-def _auto_type_convert(value_str):
-    if isinstance(value_str, str):
-        lower_str = value_str.lower()
+def _auto_type_convert(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lower_str = value.lower()
         if lower_str == 'true':
             return True
         if lower_str == 'false':
             return False
     try:
-        return int(value_str)
+        return int(value)
     except ValueError:
         try:
-            return float(value_str)
+            return float(value)
         except ValueError:
             pass
-    return value_str
+    return value
