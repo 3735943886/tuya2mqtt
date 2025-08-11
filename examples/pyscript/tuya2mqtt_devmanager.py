@@ -48,7 +48,7 @@ MODE_REMOTE_CONTROL = "remote_control"
 MODE_WIRELESS_SWITCH = "wireless_switch"
 
 # --- Device Manager Settings ---
-MANUFACTURER = "Tuya2MQTT (Refactored)"
+MANUFACTURER = "Tuya2MQTT (3735943886)"
 
 # Device-specific custom DP (Data Point) mappings.
 # If a device uses non-standard DPs, define them here.
