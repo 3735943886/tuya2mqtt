@@ -302,30 +302,50 @@ fields:
     devices = _read_devices_file(devices_file)
     if not devices:
         return
-
-    for device in devices:
+        
+    def process_device_registration(device_to_process, add_mode, excluded_cats):
+        """Helper function to avoid code repetition."""
         # Apply custom DPs
-        product_id = device.get('product_id')
+        product_id = device_to_process.get('product_id')
         if product_id in CUSTOMIZATIONS:
-            device.setdefault('mapping', {}).update(CUSTOMIZATIONS[product_id])
+            device_to_process.setdefault('mapping', {}).update(CUSTOMIZATIONS[product_id])
 
-        is_sub_device = 'parent' in device and 'node_id' in device
-        device_id = device['node_id'] if is_sub_device else device['id']
+        is_sub = 'parent' in device_to_process and 'node_id' in device_to_process
+        dev_id = device_to_process['node_id'] if is_sub else device_to_process['id']
         
         # Send add/delete request to the tuya2mqtt daemon
-        if add:
-            add_payload = {'disabledetect': 1} if not is_sub_device else {}
-            mqtt.publish(topic=T2M_DEVICE_ADD_TOPIC, payload=json.dumps({**device, **add_payload}))
+        if add_mode:
+            add_payload = {'disabledetect': 1} if not is_sub else {}
+            mqtt.publish(topic=T2M_DEVICE_ADD_TOPIC, payload=json.dumps({**device_to_process, **add_payload}))
         else:
-            mqtt.publish(topic=T2M_DEVICE_DEL_TOPIC, payload=json.dumps({'id': device_id}))
+            mqtt.publish(topic=T2M_DEVICE_DEL_TOPIC, payload=json.dumps({'id': dev_id}))
 
         # If not in excluded categories, publish HA Discovery config
-        if device.get('category') not in excluded_categories:
-            _set_ha_discovery_config(device=device, add=add)
+        if device_to_process.get('category') not in excluded_cats:
+            _set_ha_discovery_config(device=device_to_process, add=add_mode)
 
         # Request a state refresh (on add only)
-        if add:
-            task.sleep(0.1) # A small delay between requests
-            mqtt.publish(topic=T2M_DEVICE_GET_TOPIC, payload=json.dumps({'id': device_id}))
+        if add_mode:
+            mqtt.publish(topic=T2M_DEVICE_GET_TOPIC, payload=json.dumps({'id': dev_id}))
 
-    log.info(f"Tuya Device Manager: {'Added' if add else 'Deleted'} {len(devices)} devices.")
+    # --- Main Logic: Process parents first, then sub-devices ---
+    
+    # 1. Process Parent Devices
+    log.info("Processing parent devices...")
+    for device in devices:
+        is_sub_device = 'parent' in device and 'node_id' in device
+        if not is_sub_device:
+            process_device_registration(device, add, excluded_categories)
+
+    # 2. Wait for 5 seconds before processing sub-devices
+    log.info("Waiting 5 seconds before processing sub-devices...")
+    task.sleep(5)
+
+    # 3. Process Sub-devices
+    log.info("Processing sub-devices...")
+    for device in devices:
+        is_sub_device = 'parent' in device and 'node_id' in device
+        if is_sub_device:
+            process_device_registration(device, add, excluded_categories)
+
+    log.info(f"Tuya Device Manager: Finished {'adding' if add else 'deleting'} devices.")
