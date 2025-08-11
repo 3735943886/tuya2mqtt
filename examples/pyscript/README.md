@@ -1,4 +1,4 @@
-## tuya2mqtt_devmanager.py
+## tuya2mqtt_ha_bridge.py
 
 This `pyscript` for Home Assistant acts as an intelligent bridge to seamlessly integrate Tuya devices into your Home Assistant environment. It works in conjunction with a Tuya to MQTT bridge service `tuya2mqtt`.
 
