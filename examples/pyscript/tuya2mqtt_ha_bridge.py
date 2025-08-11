@@ -140,7 +140,7 @@ def _handle_integer(mapping: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, A
                 options['value_template'] = f'{{{{ (value | float / {scale_factor}) | round(1) }}}}'
                 if options.get('step') == 1: options['step'] = 1.0 / scale_factor
             break
-    
+
     if 'countdown' in code:
         options['device_class'] = 'duration'
     elif 'value' in code or 'state' in code and dev_type == 'number':
@@ -148,7 +148,7 @@ def _handle_integer(mapping: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, A
 
     if 'unit' in values and 'unit_of_measurement' not in options:
         options['unit_of_measurement'] = _get_ha_unit(values['unit'])
-        
+
     return dev_type, {k: v for k, v in options.items() if v is not None}
 
 
@@ -228,7 +228,7 @@ def _set_ha_discovery_config(device: Dict[str, Any], add: bool = True) -> None:
             payload['command_topic'] = HA_COMMAND_TOPIC_TEMPLATE.format(device_id, dp_key)
 
         config_topic = HA_DISCOVERY_TOPIC_TEMPLATE.format(dev_type, device_id, dp_key)
-        
+
         # Publish the config payload if add=True, or an empty payload to delete.
         config_payload = json.dumps(payload) if add else ""
         mqtt.publish(topic=config_topic, payload=config_payload, retain=True)
@@ -302,7 +302,7 @@ fields:
     devices = _read_devices_file(devices_file)
     if not devices:
         return
-        
+
     def process_device_registration(device_to_process, add_mode, excluded_cats):
         """Helper function to avoid code repetition."""
         # Apply custom DPs
@@ -312,7 +312,7 @@ fields:
 
         is_sub = 'parent' in device_to_process and 'node_id' in device_to_process
         dev_id = device_to_process['node_id'] if is_sub else device_to_process['id']
-        
+
         # Send add/delete request to the tuya2mqtt daemon
         if add_mode:
             add_payload = {'disabledetect': 1} if not is_sub else {}
@@ -328,8 +328,6 @@ fields:
         if add_mode:
             mqtt.publish(topic=T2M_DEVICE_GET_TOPIC, payload=json.dumps({'id': dev_id}))
 
-    # --- Main Logic: Process parents first, then sub-devices ---
-    
     # 1. Process Parent Devices
     log.info("Processing parent devices...")
     for device in devices:
