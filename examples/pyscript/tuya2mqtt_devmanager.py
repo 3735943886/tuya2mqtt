@@ -1,319 +1,331 @@
+"""
+Pyscript Module: An integrated bridge and device manager between Tuya devices and Home Assistant.
+
+This script performs two main functions:
+1.  Real-time Bridge (MQTT Triggers):
+    - Listens for data (status/events) from the tuya2mqtt daemon and publishes it to Home Assistant state topics.
+    - Listens for commands from Home Assistant, translates them into the format expected by the tuya2mqtt daemon, and sends them.
+
+2.  Device Manager (Service Call):
+    - Provides a service to read a devices.json file and automatically register or delete Tuya devices via Home Assistant MQTT Discovery.
+    - Supports custom device mappings and attribute conversions.
+"""
+
 import json
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-# --- Constants ---
-BASE_TOPIC = 'homeassistant'
-STATE_TOPIC_BASE = f'{BASE_TOPIC}/tuya2mqtt/state'
-COMMAND_TOPIC_BASE = f'{BASE_TOPIC}/tuya2mqtt/command'
-ADD_TOPIC = 'tuya2mqtt/device/add'
-DEL_TOPIC = 'tuya2mqtt/device/delete'
-GET_TOPIC = 'tuya2mqtt/device/get'
-SET_TOPIC = 'tuya2mqtt/device/set'
-MANUFACTURER = 'Tuya2MQTT (3735943886)'
-EXCLUDED_CATEGORIES = None
+# ==============================================================================
+# --- 1. Unified Constants & Configuration ---
+# ==============================================================================
 
-# --- Device Customizations ---
+# --- Base Topics ---
+HA_BASE_TOPIC = "homeassistant"
+T2M_BASE_TOPIC = "tuya2mqtt"
+
+# --- Tuya2MQTT Daemon Topics ---
+T2M_DATA_TRIGGER_TOPIC = f"{T2M_BASE_TOPIC}/data/#"
+T2M_DEVICE_SET_TOPIC = f"{T2M_BASE_TOPIC}/device/set"
+T2M_DEVICE_ADD_TOPIC = f"{T2M_BASE_TOPIC}/device/add"
+T2M_DEVICE_DEL_TOPIC = f"{T2M_BASE_TOPIC}/device/delete"
+T2M_DEVICE_GET_TOPIC = f"{T2M_BASE_TOPIC}/device/get"
+
+# --- Home Assistant Topics ---
+HA_STATE_TOPIC_TEMPLATE = f"{HA_BASE_TOPIC}/tuya2mqtt/state/{{}}_{{}}"
+HA_COMMAND_TOPIC_TEMPLATE = f"{HA_BASE_TOPIC}/tuya2mqtt/command/{{}}_{{}}"
+HA_DISCOVERY_TOPIC_TEMPLATE = f"{HA_BASE_TOPIC}/{{}}/{{}}_{{}}/config"
+
+# --- Common Keys & Values ---
+KEY_ID = "id"
+KEY_DATA = "data"
+KEY_NAME = "name"
+KEY_TOPIC = "topic"
+KEY_PAYLOAD = "payload"
+KEY_PAYLOAD_OBJ = "payload_obj"
+TOPIC_ID_COMMAND = "command"
+BUTTON_EVENTS = {"single_click", "double_click", "long_press"}
+EVENT_TYPE_KEY = "event_type"
+MODE_REMOTE_CONTROL = "remote_control"
+MODE_WIRELESS_SWITCH = "wireless_switch"
+
+# --- Device Manager Settings ---
+MANUFACTURER = "Tuya2MQTT (Refactored)"
+
+# Device-specific custom DP (Data Point) mappings.
+# If a device uses non-standard DPs, define them here.
 CUSTOMIZATIONS: Dict[str, Dict[str, Any]] = {
     'e833v6jexwfkjrij': {  # PRESENCE SENSOR
-        '101': {
-            "code": "distance", "type": "Integer",
-            "values": {"unit": "cm", "min": 0, "max": 1000, "scale": 1, "step": 1}
-        },
-        '102': {
-            "code": "illuminance", "type": "Integer",
-            "values": {"unit": "lx", "min": 0, "max": 10000, "scale": 0, "step": 1}
-        }
+        '101': {"code": "distance", "type": "Integer", "values": {"unit": "cm", "min": 0, "max": 1000, "step": 1}},
+        '102': {"code": "illuminance", "type": "Integer", "values": {"unit": "lx", "min": 0, "max": 10000}},
     },
     '5rta89nj': {  # PUSHER
-        '104': {
-            "code": "percent_control", "type": "Integer",
-            "values": {"unit": "%", "min": 0, "max": 100, "step": 1}
-        }
+        '104': {"code": "percent_control", "type": "Integer", "values": {"unit": "%", "min": 0, "max": 100, "step": 1}},
     }
 }
 
-# --- Topic ---
-TUYA2MQTT_TOPIC = {
-    'listener': {
-        'trigger': 'tuya2mqtt/data/#',
-        'publish': STATE_TOPIC_BASE + '/{}_{}',
-    },
-    'translater': {
-        'trigger': f'{COMMAND_TOPIC_BASE}/#',
-        'publish': SET_TOPIC,
-    },
-}
 
-# --- Helper Functions for Processing Mappings ---
+# ==============================================================================
+# --- 2. Helper Functions ---
+# ==============================================================================
+
+def _auto_type_convert(value: str) -> Any:
+    """Automatically converts a string to its likely type (bool, int, float, or str)."""
+    if not isinstance(value, str):
+        return value
+    lower_value = value.lower()
+    if lower_value == 'true': return True
+    if lower_value == 'false': return False
+    try: return int(value)
+    except ValueError:
+        try: return float(value)
+        except ValueError: return value
+
 def _get_ha_unit(raw_unit: str) -> str:
     """Cleans and maps raw units to Home Assistant standards."""
     unit_map = {'w': 'W', 'kwh': 'kWh', 'kw': 'kW', 'v': 'V', 'ma': 'mA', 'a': 'A'}
     cleaned_unit = ''.join(filter(str.isalpha, raw_unit)).lower()
     return unit_map.get(cleaned_unit, raw_unit)
 
-def _handle_boolean(mapping: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    """Handles 'Boolean' type mappings."""
-    mappingcode = mapping['code']
+# --- Handlers for DP Types ---
+
+def _handle_boolean(mapping: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
+    """Handles 'Boolean' type DPs and returns the HA entity type and options."""
+    code = mapping['code']
     options = {'payload_on': True, 'payload_off': False}
-    if 'state' in mappingcode:
-        devicetype = 'binary_sensor'
-        if 'door' in mappingcode:
-            options['device_class'] = 'door'
+    if 'state' in code:
+        dev_type = 'binary_sensor'
+        if 'door' in code: options['device_class'] = 'door'
     else:
-        devicetype = 'switch'
-    return devicetype, options
+        dev_type = 'switch'
+    return dev_type, options
 
-def _handle_enum(mapping: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    """Handles 'Enum' type mappings."""
-    mappingcode = mapping['code']
-    options = {}
-    if 'switch_mode' in mappingcode:
-        devicetype = 'event'
-        # Tuya scene buttons often have incorrect ENUM ranges.
-        options['event_types'] = ['single_click', 'double_click', 'long_press']
-    elif 'control' in mappingcode:
-        devicetype = 'select'
-        options['options'] = mapping['values']['range']
-    else:
-        devicetype = 'sensor'
-    return devicetype, options
+def _handle_enum(mapping: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
+    """Handles 'Enum' type DPs."""
+    code = mapping['code']
+    if 'switch_mode' in code:
+        # Scene switches are typically handled as 'event' type.
+        return 'event', {'event_types': list(BUTTON_EVENTS)}
+    if 'control' in code:
+        return 'select', {'options': mapping['values']['range']}
+    return 'sensor', {}
 
-def _handle_integer(mapping: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
-    """Handles 'Integer' type mappings."""
-    mappingcode = mapping['code']
+def _handle_integer(mapping: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
+    """Handles 'Integer' type DPs."""
+    code = mapping['code']
     values = mapping['values']
-    devicetype = 'number'  # Default for Integer
-    options = {
-        'min': values.get('min'),
-        'max': values.get('max'),
-        'step': values.get('step'),
+    dev_type = 'number'  # Default type
+    options = {'min': values.get('min'), 'max': values.get('max'), 'step': values.get('step')}
+
+    # Override to sensor type and set device_class based on specific codes.
+    sensor_map = {
+        'add_ele': ('energy', None, None),
+        'cur_current': ('current', None, None),
+        'cur_power': ('power', 10000, 10),
+        'cur_voltage': ('voltage', 1000, 10),
+        'battery': ('battery', None, None),
+        'residual_electricity': ('battery', None, None),
+        'temperature': ('temperature', 100, 10),
+        'humidity': ('humidity', 100, 10),
+        'distance': ('distance', None, None),
+        'illuminance': ('illuminance', None, None),
     }
 
-    # Sensor-specific overrides
-    if mappingcode == 'add_ele':
-        devicetype, options['device_class'] = 'sensor', 'energy'
-    elif mappingcode == 'cur_current':
-        devicetype, options['device_class'] = 'sensor', 'current'
-    elif mappingcode == 'cur_power':
-        devicetype, options['device_class'] = 'sensor', 'power'
-        if values.get('max') > 10000:
-            options['value_template'] = '{{ (value | float / 10) | round(1) }}'
-            options['step'] = 0.1
-    elif mappingcode == 'cur_voltage':
-        devicetype, options['device_class'] = 'sensor', 'voltage'
-        if values.get('max') > 1000:
-            options['value_template'] = '{{ (value | float / 10) | round(1) }}'
-            options['step'] = 0.1
-    elif 'battery' in mappingcode or 'residual_electricity' in mappingcode:
-        devicetype, options['device_class'] = 'sensor', 'battery'
-        options['unit_of_measurement'] = '%'
-    elif 'temperature' in mappingcode:
-        devicetype, options['device_class'] = 'sensor', 'temperature'
-        options['unit_of_measurement'] = '°C'
-        if values.get('max') > 100:
-            options['value_template'] = '{{ (value | float / 10) | round(1) }}'
-            options['step'] = 0.1
-    elif 'humidity' in mappingcode:
-        devicetype, options['device_class'] = 'sensor', 'humidity'
-        options['unit_of_measurement'] = '%'
-        if values.get('max') > 100:
-            options['value_template'] = '{{ (value | float / 10) | round(1) }}'
-            options['step'] = 0.1
-    elif 'countdown' in mappingcode:
+    for key, (dev_class, scale_threshold, scale_factor) in sensor_map.items():
+        if key in code:
+            dev_type = 'sensor'
+            options['device_class'] = dev_class
+            if 'unit' not in values:
+                unit_overrides = {'battery': '%', 'temperature': '°C', 'humidity': '%', 'illuminance': 'lx'}
+                if dev_class in unit_overrides: options['unit_of_measurement'] = unit_overrides[dev_class]
+            if scale_threshold and values.get('max', 0) > scale_threshold:
+                options['value_template'] = f'{{{{ (value | float / {scale_factor}) | round(1) }}}}'
+                if options.get('step') == 1: options['step'] = 1.0 / scale_factor
+            break
+    
+    if 'countdown' in code:
         options['device_class'] = 'duration'
-    elif 'distance' in mappingcode:
-        devicetype, options['device_class'] = 'sensor', 'distance'
-    elif 'illuminance' in mappingcode:
-        devicetype, options['device_class'] = 'sensor', 'illuminance'
-        options['unit_of_measurement'] = 'lx'
-    elif 'value' in mappingcode or 'state' in mappingcode:
-        devicetype = 'sensor'
+    elif 'value' in code or 'state' in code and dev_type == 'number':
+        dev_type = 'sensor'
 
-    if 'unit' in values:
-        if 'unit_of_measurement' not in options:
-            options['unit_of_measurement'] = _get_ha_unit(values['unit'])
-    # Remove None values from options
-    return devicetype, {k: v for k, v in options.items() if v is not None}
-
-# --- Core Functions ---
-def customize_device(device: Dict[str, Any]) -> None:
-    """Applies device-specific mappings from the CUSTOMIZATIONS dictionary."""
-    product_id = device.get('product_id')
-    if product_id in CUSTOMIZATIONS:
-        device['mapping'].update(CUSTOMIZATIONS[product_id])
-
-def set_device(device: Dict[str, Any], topic_root: str = BASE_TOPIC, add: bool = True) -> None:
-    """
-    Generates and publishes Home Assistant MQTT discovery configurations for a device.
-    """
-    mapping_handlers = {
-        'Boolean': _handle_boolean,
-        'Enum': _handle_enum,
-        'Integer': _handle_integer,
-    }
-
-    is_sub_device = True if 'parent' in device and 'node_id' in device else False
-    device_id = device['node_id'] if is_sub_device else device['id']
-
-    base_payload = {
-        'device': {
-            'identifiers': [device_id],
-            'name': device['name'],
-            'manufacturer': MANUFACTURER,
-            'model': device.get('model') or device.get('product_name'),
-            'sw_version': device['version'],
-        },
-    }
-    if device.get('mac'):
-        base_payload['device']['connections'] = [['mac', device['mac']]]
-    if device.get('ip'):
-        base_payload['device'].setdefault('connections', []).append(['ip', device['ip']])
-
-    for mapping_key, mapping_data in device.get('mapping', {}).items():
-        mapping_type = mapping_data.get('type')
-        handler = mapping_handlers.get(mapping_type)
-
-        if not handler:
-            continue
-
-        devicetype, options = handler(mapping_data)
-        if not devicetype or 'test' in mapping_data['code']:
-            continue
-
-        unique_id_suffix = f"{device_id}_{mapping_key}"
-
-        payload = {
-            **base_payload,
-            'name': mapping_data['code'],
-            'unique_id': unique_id_suffix,
-            'object_id': f"{device['name']}_{mapping_data['code']}",
-            'state_topic': f"{STATE_TOPIC_BASE}/{unique_id_suffix}",
-        }
-
-        if 'sensor' not in devicetype and 'event' not in devicetype:
-            payload['command_topic'] = f"{COMMAND_TOPIC_BASE}/{unique_id_suffix}"
-
-        # Merge the generated options and publish
-        full_payload = {**payload, **options}
-        config_topic = f"{topic_root}/{devicetype}/{unique_id_suffix}/config"
-
-        if add:
-            mqtt.publish(topic=config_topic, payload=json.dumps(full_payload), retain=True)
-        else:
-            mqtt.publish(topic=config_topic, retain=True)
+    if 'unit' in values and 'unit_of_measurement' not in options:
+        options['unit_of_measurement'] = _get_ha_unit(values['unit'])
+        
+    return dev_type, {k: v for k, v in options.items() if v is not None}
 
 
-@service
-def tuya2mqtt_ha_device_manager(add=True, devices_file='/config/pyscript/devices.json', excluded_categories={'wg2', 'zjq', 'jzq'}):
-    """yaml
-name: Manage devices on Tuya2MQTT and Home Assistant
-description: Read devices.json and manage registration of devices on Tuya2MQTT and Home Assistant.
-fields:
-  add:
-    example: true
-    description: true to add device, false to delete device
-  devices_file:
-    example: /config/pyscript/devices.json
-    description: devices.json file created by tinytuya wizard
-  excluded_categories:
-    example: [wg2, zjq, jzq]
-    description: categories not to be added to home assistant (gateway, repeater, etc.)
-"""
+# ==============================================================================
+# --- 3. Core Logic Functions ---
+# ==============================================================================
 
-    global EXCLUDED_CATEGORIES
+def _process_device_data(topic: str, payload_obj: Dict[str, Any]) -> None:
+    """Processes a single data payload from the tuya2mqtt daemon."""
+    device_id = payload_obj.get(KEY_ID)
+    device_name = payload_obj.get(KEY_NAME)
+    device_data = payload_obj.get(KEY_DATA)
 
-    devices = device_open(devices_file)
-    if 'error' in devices:
-        log.error(devices['error'])
+    if not all([device_id, device_data]):
+        log.warning(f"Ignoring incomplete message on topic {topic}: {payload_obj}")
         return
 
-    EXCLUDED_CATEGORIES = excluded_categories
-    for subdev in [False, True]:
-        # Process all devices in a single loop, handling both main and sub-devices.
-        for device in devices:
+    is_command_topic = TOPIC_ID_COMMAND in topic
 
-            is_sub_device = True if 'node_id' in device and 'parent' in device else False
-            if is_sub_device == subdev:
-                device_id = device['node_id'] if is_sub_device else device['id']
-                add_payload = {}
+    for dp_key, dp_value in device_data.items():
+        publish_payload = dp_value
 
-                # The original code sent 'disabledetect' only for non-sub devices.
-                if not is_sub_device:
-                    add_payload['disabledetect'] = 1
+        if is_command_topic:
+            event.fire('tuya2mqtt_command_event', id=device_id, name=device_name, key=dp_key, value=dp_value)
+            if dp_value == MODE_REMOTE_CONTROL:
+                set_payload = json.dumps([{KEY_ID: device_id, KEY_DATA: {dp_key: MODE_WIRELESS_SWITCH}}])
+                mqtt.publish(topic=T2M_DEVICE_SET_TOPIC, payload=set_payload)
+            if dp_value in BUTTON_EVENTS:
+                publish_payload = json.dumps({EVENT_TYPE_KEY: dp_value})
+        else:  # Status topic
+            if dp_value in BUTTON_EVENTS:
+                continue
 
-                if add:
-                    mqtt.publish(topic=ADD_TOPIC, payload=json.dumps({**device, **add_payload}))
-                else:
-                    mqtt.publish(topic=DEL_TOPIC, payload=json.dumps({'id': device_id}))
+        publish_topic = HA_STATE_TOPIC_TEMPLATE.format(device_id, dp_key)
+        mqtt.publish(topic=publish_topic, payload=publish_payload, retain=True)
 
-                if device.get('category') not in EXCLUDED_CATEGORIES:
-                    customize_device(device)
-                    set_device(device=device, add=add)
+def _set_ha_discovery_config(device: Dict[str, Any], add: bool = True) -> None:
+    """Publishes the HA MQTT Discovery configuration for a single device."""
+    mapping_handlers = {'Boolean': _handle_boolean, 'Enum': _handle_enum, 'Integer': _handle_integer}
 
-                    if add:
-                        # Request updated state for the device/node.
-                        mqtt.publish(topic=GET_TOPIC, payload=json.dumps({'id': device_id}))
+    is_sub_device = 'parent' in device and 'node_id' in device
+    device_id = device['node_id'] if is_sub_device else device['id']
+    device_name = device['name']
 
-        task.sleep(5)
+    device_info = {
+        'identifiers': [device_id],
+        'name': device_name,
+        'manufacturer': MANUFACTURER,
+        'model': device.get('model') or device.get('product_name'),
+        'sw_version': device['version'],
+    }
+    connections = []
+    if device.get('mac'): connections.append(['mac', device['mac']])
+    if device.get('ip'): connections.append(['ip', device['ip']])
+    if connections: device_info['connections'] = connections
 
+    for dp_key, mapping in device.get('mapping', {}).items():
+        handler = mapping_handlers.get(mapping.get('type'))
+        if not handler or 'test' in mapping.get('code', ''):
+            continue
+
+        dev_type, options = handler(mapping)
+        if not dev_type:
+            continue
+
+        unique_id = f"{device_id}_{dp_key}"
+        payload = {
+            'device': device_info,
+            'name': mapping['code'],
+            'unique_id': unique_id,
+            'object_id': f"{device_name.lower().replace(' ', '_')}_{mapping['code']}",
+            'state_topic': HA_STATE_TOPIC_TEMPLATE.format(device_id, dp_key),
+            **options,
+        }
+
+        if dev_type not in ['sensor', 'binary_sensor', 'event']:
+            payload['command_topic'] = HA_COMMAND_TOPIC_TEMPLATE.format(device_id, dp_key)
+
+        config_topic = HA_DISCOVERY_TOPIC_TEMPLATE.format(dev_type, device_id, dp_key)
+        
+        # Publish the config payload if add=True, or an empty payload to delete.
+        config_payload = json.dumps(payload) if add else ""
+        mqtt.publish(topic=config_topic, payload=config_payload, retain=True)
 
 @pyscript_executor
-def device_open(file):
+def _read_devices_file(file_path: str) -> List[Dict[str, Any]]:
+    """Reads the device file and parses its JSON content."""
     try:
-        with open(file, 'r') as f:
+        with open(file_path, 'r') as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        return {'error': e}
+    except FileNotFoundError:
+        log.error(f"Device file not found: {file_path}")
+    except json.JSONDecodeError:
+        log.error(f"Error decoding JSON from file: {file_path}")
+    return []
 
 
-@mqtt_trigger(TUYA2MQTT_TOPIC['listener']['trigger'])
-def tuya2mqtt_listener(**kwargs):
-    global TUYA2MQTT_TOPIC
-    if 'topic' in kwargs and 'payload_obj' in kwargs:
-        if 'command' in kwargs['topic'] or 'status' in kwargs['topic']:
-            if 'data' in kwargs['payload_obj']:
-                for data in kwargs['payload_obj']['data']:
-                    payload = kwargs['payload_obj']['data'][data]
-                    if 'command' in kwargs['topic']:
-                        event.fire('tuya2mqtt_command_event', id = kwargs['payload_obj']['id'], name = kwargs['payload_obj']['name'], key = data, value = payload)
-                        if payload == 'remote_control':
-                            # SET BACK TO WIRELESS_SWITCH MODE IN CASE OF SWICHING TO REMOTE_CONTROL MODE
-                            mqtt.publish(topic = TUYA2MQTT_TOPIC['translater']['publish'], payload = json.dumps([{'id': kwargs['payload_obj']['id'], 'data': {data: 'wireless_switch'}}]))
-                        if payload in ('single_click', 'double_click', 'long_press'):
-                            # MUST BE SET AS EVENT_TYPE FOR TUYA SCENE BUTTONS
-                            payload = json.dumps({ 'event_type': payload })
-                    else:
-                        if payload in ('single_click', 'double_click', 'long_press'):
-                            # IGNORE BUTTON EVENT IF STATUS TOPIC RECEIVED
-                            continue
-                    mqtt.publish(topic = TUYA2MQTT_TOPIC['listener']['publish'].format(kwargs['payload_obj']['id'], data), payload = payload, retain = True)
+# ==============================================================================
+# --- 4. Pyscript Triggers & Services ---
+# ==============================================================================
 
+@mqtt_trigger(T2M_DATA_TRIGGER_TOPIC)
+def tuya_realtime_bridge_listener(**kwargs: Any) -> None:
+    """
+    Listens for all data from the tuya2mqtt daemon, processes it, and relays the state to HA.
+    """
+    topic = kwargs.get(KEY_TOPIC)
+    payload_obj = kwargs.get(KEY_PAYLOAD_OBJ)
+    if not topic or not payload_obj or KEY_DATA not in payload_obj:
+        return
+    _process_device_data(topic, payload_obj)
 
-@mqtt_trigger(TUYA2MQTT_TOPIC['translater']['trigger'])
-def tuya2mqtt_translater(**kwargs):
-    global TUYA2MQTT_TOPIC
-    if 'topic' in kwargs:
-        items = kwargs['topic'].split('/')
-        ids = items[3].split('_')
-        payload = _auto_type_convert(kwargs['payload'])
-        mqtt.publish(topic = TUYA2MQTT_TOPIC['translater']['publish'], payload = json.dumps([{'id': ids[0], 'data': {ids[1]: payload}}]))
+@mqtt_trigger(HA_COMMAND_TOPIC_TEMPLATE.replace('{}_{}', '#'))
+def tuya_realtime_bridge_translater(**kwargs: Any) -> None:
+    """
+    Listens for commands from HA and translates them for the tuya2mqtt daemon.
+    """
+    topic = kwargs.get(KEY_TOPIC)
+    payload_str = kwargs.get(KEY_PAYLOAD)
+    if not topic: return
 
-
-@pyscript_compile
-def _auto_type_convert(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        lower_str = value.lower()
-        if lower_str == 'true':
-            return True
-        if lower_str == 'false':
-            return False
     try:
-        return int(value)
-    except ValueError:
-        try:
-            return float(value)
-        except ValueError:
-            pass
-    return value
+        topic_parts = topic.split('/')
+        device_id, dp_key = topic_parts[-1].split('_')
+    except (IndexError, ValueError) as e:
+        log.error(f"Could not parse command topic '{topic}': {e}")
+        return
+
+    set_payload = json.dumps([{
+        KEY_ID: device_id,
+        KEY_DATA: {dp_key: _auto_type_convert(payload_str)}
+    }])
+    mqtt.publish(topic=T2M_DEVICE_SET_TOPIC, payload=set_payload)
+
+@service
+def tuya_device_manager(add: bool = True, devices_file: str = '/config/pyscript/devices.json', excluded_categories: List[str] = ['wg2', 'zjq', 'jzq']):
+    """yaml
+name: Tuya Device Manager
+description: Reads a devices.json file to register or delete Tuya devices in Home Assistant.
+fields:
+  add:
+    description: "Set to true to add devices, false to delete."
+    example: true
+  devices_file:
+    description: "Path to the devices.json file generated by tinytuya wizard."
+    example: "/config/pyscript/devices.json"
+  excluded_categories:
+    description: "Device categories to exclude from HA (e.g., gateways, repeaters)."
+    example: ['wg2', 'zjq', 'jzq']
+"""
+    devices = _read_devices_file(devices_file)
+    if not devices:
+        return
+
+    for device in devices:
+        # Apply custom DPs
+        product_id = device.get('product_id')
+        if product_id in CUSTOMIZATIONS:
+            device.setdefault('mapping', {}).update(CUSTOMIZATIONS[product_id])
+
+        is_sub_device = 'parent' in device and 'node_id' in device
+        device_id = device['node_id'] if is_sub_device else device['id']
+        
+        # Send add/delete request to the tuya2mqtt daemon
+        if add:
+            add_payload = {'disabledetect': 1} if not is_sub_device else {}
+            mqtt.publish(topic=T2M_DEVICE_ADD_TOPIC, payload=json.dumps({**device, **add_payload}))
+        else:
+            mqtt.publish(topic=T2M_DEVICE_DEL_TOPIC, payload=json.dumps({'id': device_id}))
+
+        # If not in excluded categories, publish HA Discovery config
+        if device.get('category') not in excluded_categories:
+            _set_ha_discovery_config(device=device, add=add)
+
+        # Request a state refresh (on add only)
+        if add:
+            task.sleep(0.1) # A small delay between requests
+            mqtt.publish(topic=T2M_DEVICE_GET_TOPIC, payload=json.dumps({'id': device_id}))
+
+    log.info(f"Tuya Device Manager: {'Added' if add else 'Deleted'} {len(devices)} devices.")
