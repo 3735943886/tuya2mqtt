@@ -13,6 +13,7 @@ This script performs two main functions:
 
 import json
 from typing import Any, Dict, List, Optional, Tuple
+from tuya2mqtt_customization import CUSTOMIZATIONS
 
 # ==============================================================================
 # --- 1. Unified Constants & Configuration ---
@@ -49,18 +50,6 @@ MODE_WIRELESS_SWITCH = "wireless_switch"
 
 # --- Device Manager Settings ---
 MANUFACTURER = "Tuya2MQTT (3735943886)"
-
-# Device-specific custom DP (Data Point) mappings.
-# If a device uses non-standard DPs, define them here.
-CUSTOMIZATIONS: Dict[str, Dict[str, Any]] = {
-    'e833v6jexwfkjrij': {  # PRESENCE SENSOR
-        '101': {"code": "distance", "type": "Integer", "values": {"unit": "cm", "min": 0, "max": 1000, "step": 1}},
-        '102': {"code": "illuminance", "type": "Integer", "values": {"unit": "lx", "min": 0, "max": 10000}},
-    },
-    '5rta89nj': {  # PUSHER
-        '104': {"code": "percent_control", "type": "Integer", "values": {"unit": "%", "min": 0, "max": 100, "step": 1}},
-    }
-}
 
 
 # ==============================================================================
@@ -133,9 +122,9 @@ def _handle_integer(mapping: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, A
         if key in code:
             dev_type = 'sensor'
             options['device_class'] = dev_class
-            if 'unit' not in values:
-                unit_overrides = {'battery': '%', 'temperature': '°C', 'humidity': '%', 'illuminance': 'lx'}
-                if dev_class in unit_overrides: options['unit_of_measurement'] = unit_overrides[dev_class]
+            unit_overrides = {'battery': '%', 'temperature': '°C', 'humidity': '%', 'illuminance': 'lx'}
+            if dev_class in unit_overrides:
+                options['unit_of_measurement'] = unit_overrides[dev_class]
             if scale_threshold and values.get('max', 0) > scale_threshold:
                 options['value_template'] = f'{{{{ (value | float / {scale_factor}) | round(1) }}}}'
                 if options.get('step') == 1: options['step'] = 1.0 / scale_factor
@@ -284,9 +273,9 @@ def tuya_realtime_bridge_translater(**kwargs: Any) -> None:
     mqtt.publish(topic=T2M_DEVICE_SET_TOPIC, payload=set_payload)
 
 @service
-def tuya_device_manager(add: bool = True, devices_file: str = '/config/pyscript/devices.json', excluded_categories: List[str] = ['wg2', 'zjq', 'jzq']):
+def tuya2mqtt_device_manager(add: bool = True, devices_file: str = '/config/pyscript/devices.json', excluded_categories: List[str] = ['wg2', 'zjq', 'jzq']):
     """yaml
-name: Tuya Device Manager
+name: Tuya2MQTT Device Manager
 description: Reads a devices.json file to register or delete Tuya devices in Home Assistant.
 fields:
   add:
