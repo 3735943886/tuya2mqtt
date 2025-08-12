@@ -13,7 +13,7 @@ This script performs two main functions:
 
 import json
 from typing import Any, Dict, List, Optional, Tuple
-from tuya2mqtt_customization import CUSTOMIZATIONS
+from tuya2mqtt_customization import CUSTOMDEVICE_MAP, SENSOR_MAP, UNIT_MAP, UNIT_OVERRIDES
 
 # ==============================================================================
 # --- 1. Unified Constants & Configuration ---
@@ -70,9 +70,8 @@ def _auto_type_convert(value: str) -> Any:
 
 def _get_ha_unit(raw_unit: str) -> str:
     """Cleans and maps raw units to Home Assistant standards."""
-    unit_map = {'w': 'W', 'kwh': 'kWh', 'kw': 'kW', 'v': 'V', 'ma': 'mA', 'a': 'A'}
     cleaned_unit = ''.join(filter(str.isalpha, raw_unit)).lower()
-    return unit_map.get(cleaned_unit, raw_unit)
+    return UNIT_MAP.get(cleaned_unit, raw_unit)
 
 # --- Handlers for DP Types ---
 
@@ -105,26 +104,12 @@ def _handle_integer(mapping: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, A
     options = {'min': values.get('min'), 'max': values.get('max'), 'step': values.get('step')}
 
     # Override to sensor type and set device_class based on specific codes.
-    sensor_map = {
-        'add_ele': ('energy', None, None),
-        'cur_current': ('current', None, None),
-        'cur_power': ('power', 10000, 10),
-        'cur_voltage': ('voltage', 1000, 10),
-        'battery': ('battery', None, None),
-        'residual_electricity': ('battery', None, None),
-        'temperature': ('temperature', 100, 10),
-        'humidity': ('humidity', 100, 10),
-        'distance': ('distance', None, None),
-        'illuminance': ('illuminance', None, None),
-    }
-
-    for key, (dev_class, scale_threshold, scale_factor) in sensor_map.items():
+    for key, (dev_class, scale_threshold, scale_factor) in SENSOR_MAP.items():
         if key in code:
             dev_type = 'sensor'
             options['device_class'] = dev_class
-            unit_overrides = {'battery': '%', 'temperature': '°C', 'humidity': '%', 'illuminance': 'lx'}
-            if dev_class in unit_overrides:
-                options['unit_of_measurement'] = unit_overrides[dev_class]
+            if dev_class in UNIT_OVERRIDES:
+                options['unit_of_measurement'] = UNIT_OVERRIDES[dev_class]
             if scale_threshold and values.get('max', 0) > scale_threshold:
                 options['value_template'] = f'{{{{ (value | float / {scale_factor}) | round(1) }}}}'
                 if options.get('step') == 1: options['step'] = 1.0 / scale_factor
@@ -296,8 +281,8 @@ fields:
         """Helper function to avoid code repetition."""
         # Apply custom DPs
         product_id = device_to_process.get('product_id')
-        if product_id in CUSTOMIZATIONS:
-            device_to_process.setdefault('mapping', {}).update(CUSTOMIZATIONS[product_id])
+        if product_id in CUSTOMDEVICE_MAP:
+            device_to_process.setdefault('mapping', {}).update(CUSTOMDEVICE_MAP[product_id])
 
         is_sub = 'parent' in device_to_process and 'node_id' in device_to_process
         dev_id = device_to_process['node_id'] if is_sub else device_to_process['id']
