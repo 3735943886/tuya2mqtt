@@ -21,8 +21,6 @@ Once completed, a `devices.json` file will be created in the current directory. 
 
 The `devices.json` file stores the device list in JSON format. To register these devices with `tuya2mqtt`, it is necessary to publish each device's information from the file to the `tuya2mqtt/device/add` topic.
 
-It is crucial to **add the Wi-Fi devices first** so that the parent gateways are registered, followed by the sub-devices (Zigbee/BLE).
-
 The following Python script can be used to automate this process.
 
 ```python
@@ -34,18 +32,9 @@ from paho.mqtt import publish
 with open('./devices.json', 'r') as f:
     devices = json.load(f)
 
-# 1. Register Wi-Fi devices (including hubs) first.
+# Register devices (including hubs).
 for device in devices:
-    if 'node_id' not in device or device['node_id'] == '':
-        publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
-
-# Wait for a few seconds to allow the hub to initialize.
-time.sleep(5)
-
-# 2. Register sub-devices (Zigbee/BLE) next.
-for device in devices:
-    if 'node_id' in device and device['node_id'] != '':
-        publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
+    publish.single('tuya2mqtt/device/add', json.dumps(device), hostname = 'localhost')
 
 print("All devices from devices.json have been sent to tuya2mqtt.")
 ```

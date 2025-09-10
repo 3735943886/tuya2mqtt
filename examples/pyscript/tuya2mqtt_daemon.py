@@ -1,39 +1,34 @@
 import asyncio
 
-tuya2mqtt_queue = asyncio.Queue()
+DAEMON_STATUS = {
+    'status': None,
+    'cond': asyncio.Condition(),
+}
+
 @service(supports_response = 'only')
-def tuya2mqtt_check_daemon(topic = 'tuya2mqtt/device/query'):
-  """yaml
+def tuya2mqtt_check_daemon(device_snapshot=True, topic='tuya2mqtt/device/query'):
+    """yaml
 name: Query Tuya2MQTT Daemon Status
 description: To query the daemon's status, publish a payload to the tuya2mqtt/device/query topic.
 fields:
+  device_snapshot:
+    example: true
   topic:
     example: tuya2mqtt/device/query
 """
-  global tuya2mqtt_queue
-  empty_queue(tuya2mqtt_queue)
-  mqtt.publish(topic=topic, payload='{"status": 1}')
-  try:
-    response = queue_timeout(tuya2mqtt_queue.get, 5)
-    tuya2mqtt_queue.task_done()
-    return response
-  except TimeoutError:
-    return {'tuya2mqtt': 'Unable to connect.'}
+    global DAEMON_STATUS
+    async with DAEMON_STATUS['cond']:
+        mqtt.publish(topic=topic, payload='{"status": true}' if device_snapshot else '{"status": false}')
+        wait_for(DAEMON_STATUS['cond'].wait, 5)
+        return DAEMON_STATUS['status']
 
 @mqtt_trigger('tuya2mqtt/log/daemon')
 def daemon_recv(payload_obj, **kwargs):
-  global tuya2mqtt_queue
-  empty_queue(tuya2mqtt_queue)
-  tuya2mqtt_queue.put_nowait(payload_obj)
-
-def empty_queue(q):
-  while not q.empty():
-    try:
-      q.get_nowait()
-      q.task_done()
-    except asyncio.QueueEmpty:
-      break
+    global DAEMON_STATUS
+    async with DAEMON_STATUS['cond']:
+        DAEMON_STATUS['status'] = payload_obj
+        DAEMON_STATUS['cond'].notify_all()
 
 @pyscript_compile
-async def queue_timeout(q, timeout):
-  return await asyncio.wait_for(q(), timeout)
+async def wait_for(func, timeout):
+  return await asyncio.wait_for(func(), timeout)

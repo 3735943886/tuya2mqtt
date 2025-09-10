@@ -193,7 +193,7 @@ def _set_ha_discovery_config(device: Dict[str, Any], add: bool = True) -> None:
             'device': device_info,
             'name': mapping['code'],
             'unique_id': unique_id,
-            'object_id': f"{device_name.lower().replace(' ', '_')}_{mapping['code']}",
+            'default_entity_id': f"{device_name.lower().replace(' ', '_')}_{mapping['code']}",
             'state_topic': HA_STATE_TOPIC_TEMPLATE.format(device_id, dp_key),
             **options,
         }
@@ -289,7 +289,7 @@ fields:
 
         # Send add/delete request to the tuya2mqtt daemon
         if add_mode:
-            add_payload = {'disabledetect': 1} if not is_sub else {}
+            add_payload = {'dev_type': 'default'} if device_to_process.get('category') == 'wg2' else {}
             mqtt.publish(topic=T2M_DEVICE_ADD_TOPIC, payload=json.dumps({**device_to_process, **add_payload}))
         else:
             mqtt.publish(topic=T2M_DEVICE_DEL_TOPIC, payload=json.dumps({'id': dev_id}))
@@ -298,26 +298,8 @@ fields:
         if device_to_process.get('category') not in excluded_cats:
             _set_ha_discovery_config(device=device_to_process, add=add_mode)
 
-        # Request a state refresh (on add only)
-        if add_mode:
-            mqtt.publish(topic=T2M_DEVICE_GET_TOPIC, payload=json.dumps({'id': dev_id}))
-
-    # 1. Process Parent Devices
-    log.info("Processing parent devices...")
+    # Process Devices
+    log.info("Processing devices...")
     for device in devices:
-        is_sub_device = 'parent' in device and 'node_id' in device
-        if not is_sub_device:
-            process_device_registration(device, add, excluded_categories)
-
-    # 2. Wait for 5 seconds before processing sub-devices
-    log.info("Waiting 5 seconds before processing sub-devices...")
-    task.sleep(5)
-
-    # 3. Process Sub-devices
-    log.info("Processing sub-devices...")
-    for device in devices:
-        is_sub_device = 'parent' in device and 'node_id' in device
-        if is_sub_device:
-            process_device_registration(device, add, excluded_categories)
-
+        process_device_registration(device, add, excluded_categories)
     log.info(f"Tuya Device Manager: Finished {'adding' if add else 'deleting'} devices.")

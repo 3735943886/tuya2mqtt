@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tuya2mqtt"
+version = "1.1.0"
+description = "Tuya Devices to MQTT Bridge"
+readme = "README.md"
+requires-python = ">=3.8"
+dependencies = [
+    "aiofiles",
+    "aiomqtt",
+    "python-daemon",
+    "tinytuya @ git+https://github.com/jasonacox/tinytuya.git@v2-async"
+]
+
+[project.urls]
+Homepage = "https://github.com/3735943886/tuya2mqtt"
+
+[tool.setuptools]
+packages = ["tuya2mqtt"]
+
+[project.scripts]
+tuya2mqtt = "tuya2mqtt.tuya2mqtt:main"

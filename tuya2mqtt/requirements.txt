@@ -1,0 +1,3 @@
+aiofiles
+aiomqtt
+git+https://github.com/jasonacox/tinytuya.git@v2-async#egg=tinytuya
