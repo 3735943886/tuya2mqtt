@@ -1,1 +1,1 @@
-from .tuya2mqtt import *
+from .tuya2mqtt import Tuya2MQTTBridge

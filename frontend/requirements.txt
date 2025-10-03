@@ -1,0 +1,6 @@
+aiofiles
+nicegui
+pillow
+tuya2mqtt
+tuya-device-sharing-sdk
+tinytuya_wizard

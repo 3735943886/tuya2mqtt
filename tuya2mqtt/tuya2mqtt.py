@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
+import argparse
 import sys
 import json
 from datetime import datetime
 import asyncio
-import aiofiles
 import tinytuya
 import aiomqtt
 import os
@@ -12,6 +12,51 @@ import signal
 import time
 import traceback
 import logging
+import functools
+import re
+from string import Template
+from contextlib import asynccontextmanager
+
+if hasattr(tinytuya, 'DeviceAsync'):
+  DeviceAsync = tinytuya.DeviceAsync
+else:
+  import tinytuya_async
+  DeviceAsync = tinytuya_async.DeviceAsync
+
+class DeviceOperationGuard:
+    def __init__(self):
+        self._adding_count = 0
+        self._deleting_count = 0
+
+    @asynccontextmanager
+    async def adding(self, last_callback=None):
+        if self._deleting_count > 0:
+            raise RuntimeError("Deletion is currently in progress.")
+        self._adding_count += 1
+        try:
+            yield
+        finally:
+            self._adding_count -= 1
+            if self._adding_count == 0 and last_callback:
+                try:
+                    await last_callback()
+                except Exception as e:
+                    logging.error(f"Callback failed in guard: {e}")
+
+    @asynccontextmanager
+    async def deleting(self, last_callback=None):
+        if self._adding_count > 0:
+            raise RuntimeError("Adding is currently in progress.")
+        self._deleting_count += 1
+        try:
+            yield
+        finally:
+            self._deleting_count -= 1
+            if self._deleting_count == 0 and last_callback:
+                try:
+                    await last_callback()
+                except Exception as e:
+                    logging.error(f"Callback failed in guard: {e}")
 
 
 class MqttLogHandler(logging.Handler):
@@ -19,8 +64,8 @@ class MqttLogHandler(logging.Handler):
         super().__init__()
         self.bridge = bridge_instance
         self.log_queue = asyncio.Queue(maxsize=1000)
-        self.bridge.log_publisher_task = self.bridge.task_creator(self._log_publisher())
-
+        self.bridge.log_publisher_task = None
+        self.publisher_lock = asyncio.Lock()
         self.level_to_topic_map = {
             logging.DEBUG: 'debug',
             logging.INFO: 'info',
@@ -30,7 +75,10 @@ class MqttLogHandler(logging.Handler):
         }
 
     def emit(self, record):
+        if self.bridge.log_publisher_task is None:
+            self.bridge.log_publisher_task = self.bridge.task_creator(self._log_publisher())
         try:
+            message = record
             message = self.format(record)
             category = self.level_to_topic_map.get(record.levelno, 'info')
             self.log_queue.put_nowait((category, message))
@@ -40,60 +88,71 @@ class MqttLogHandler(logging.Handler):
             sys.stderr.write(f"MQTT_LOG_FAIL: {e} | {message}\n")
 
     async def _log_publisher(self):
-        while True:
-            category, message = await self.log_queue.get()
-            try:
-                if self.bridge.mqtt_publisher:
-                    topic = self.bridge.mqtt_config['topic']['publish'][category]
-                    await self.bridge.mqtt_publisher(topic=topic, payload=message)
-                else:
-                    sys.stderr.write(f"{message}\n")
-            except aiomqtt.MqttError as e:
-                sys.stderr.write(f"MQTT_LOG_FAIL: {e} | {message}\n")
-            finally:
-                self.log_queue.task_done()
+        async with self.publisher_lock:
+            while True:
+                category, message = await self.log_queue.get()
+                try:
+                    if self.bridge.mqtt_publisher:
+                        topic = self.bridge.settings['topic']['log'][category]
+                        await self.bridge.mqtt_publisher(topic=topic, payload=message)
+                    else:
+                        sys.stderr.write(f"{message}\n")
+                except Exception as e:
+                    sys.stderr.write(f"MQTT_LOG_FAIL: {e} | {message}\n")
+                finally:
+                    self.log_queue.task_done()
 
-class TuyaMQTTBridge:
-    def __init__(self, config, foreground=False, debug=False, logger=None, mqtt_publisher=None, task_creator=None):
-        # --- Configuration & State ---
-        self.config = config
-        self.foreground = foreground
-        self.logger = logger
-        self.debug = debug
 
-        self.daemon_stat = {
-            'version': '1.1.0',
-            'start_time': datetime.now(),
-        }
-        self.root_topic = 'tuya2mqtt'
-        self.mqtt_config = {
+class Tuya2MQTTBridge:
+    def __init__(self, **kwargs):
+        # --- Initialization ---
+        self.log_level = kwargs.pop('log_level', 'WARNING')
+        self.logger = kwargs.pop('logger', None)
+        self.mqtt_publisher = kwargs.pop('mqtt_publisher', None)
+        self.task_creator = kwargs.pop('task_creator', asyncio.create_task)
+        self.root_topic = kwargs.pop('root_topic', 'tuya2mqtt')
+        foreground = kwargs.pop('foreground', False)
+
+        self.topic_done = False
+        self.snapshot_done = False
+        self.is_shutting_down = False
+        self.shutdown_event = asyncio.Event()
+        self.op_guard = DeviceOperationGuard()
+
+        inflow_topic = f"{self.root_topic}/intro"
+        outflow_topic = f"{self.root_topic}/extra"
+        self.settings = {
             'broker': {
                 'hostname': 'localhost',
                 'port': 1883,
             },
-            'login': {
-                'username': '',
-                'password': '',
-            },
             'topic': {
                 'subscribe': {
-                    'add': f"{self.root_topic}/device/add",
-                    'delete': f"{self.root_topic}/device/delete",
-                    'query': f"{self.root_topic}/device/query",
-                    'set': f"{self.root_topic}/device/set",
-                    'get': f"{self.root_topic}/device/get",
-                    'command': f"{self.root_topic}/device/command",
+                    'add': f"{inflow_topic}/device/add",
+                    'delete': f"{inflow_topic}/device/delete",
+                    'set': f"{inflow_topic}/device/set",
+                    'get': f"{inflow_topic}/device/get",
+                    'command': f"{inflow_topic}/device/command",
+                    'query': f"{inflow_topic}/daemon/query",
                 },
                 'publish': {
-                    'command': f"{self.root_topic}/data/command",
-                    'status': f"{self.root_topic}/data/status",
-                    'daemon': f"{self.root_topic}/log/daemon",
+                    'active': f"{outflow_topic}/device/active",
+                    'passive': f"{outflow_topic}/device/passive",
+                    'error': f"{outflow_topic}/device/error",
+                    'daemon': f"{outflow_topic}/daemon/status",
+                    'snapshot': f"{outflow_topic}/daemon/snapshot",
+                },
+                'log': {
                     'debug': f"{self.root_topic}/log/debug",
                     'info': f"{self.root_topic}/log/info",
                     'warning': f"{self.root_topic}/log/warning",
                     'error': f"{self.root_topic}/log/error",
                     'critical': f"{self.root_topic}/log/critical",
                 },
+            },
+            'format': {
+                'publish': '{"id": $id, "name": $name, "data": $dps}',
+                'log': '%(asctime)s - %(levelname)s - %(message)s',
             },
             'daemon': {
                 'subdevice_add_retries': 10,
@@ -103,39 +162,55 @@ class TuyaMQTTBridge:
                 'instance_lock_timeout': 0.2,
             },
         }
-        self.mqtt_publisher = mqtt_publisher
-        self.task_creator = task_creator or asyncio.create_task
+        self.daemon_stat = {
+            'version': '1.2.5',
+            'start_time': datetime.now(),
+        }
         self.tuya_state = {
             'device': {
                 'id': {},
                 'name': {},
             },
-            'lock': asyncio.Lock(),
         }
-        self.shutdown_event = asyncio.Event()
+        # Other configuration
+        self._load_conf(kwargs)
+
+        # Settup logger if not set
+        self.log_format = self.settings.get('format', {}).get('log')
+        if self.logger is None:
+            self._setup_logging(foreground)
+        if self.log_level == logging.DEBUG or self.log_level == 'DEBUG':
+            tinytuya.set_debug(True)
+            print("TinyTuya debugging enabled.")
+
+        # Increase file descriptor limit if possible
+        try:
+            soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if soft < hard:
+                resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
+        except (ValueError, OSError) as e:
+            print(f"Could not set rlimit: {e}")
 
     # --- Logging ---
-    def _setup_logging(self, debug=False):
-        self.logger = logging.getLogger('TuyaMQTTBridge')
-        log_level = logging.DEBUG if debug else logging.INFO
-        self.logger.setLevel(log_level)
+    def _setup_logging(self, foreground):
+        self.logger = logging.getLogger('Tuya2MQTTBridge')
+        try:
+            self.logger.setLevel(self.log_level)
+        except (ValueError, AttributeError):
+            self.logger.setLevel(logging.WARNING)
         self.logger.propagate = False
-
         if self.logger.hasHandlers():
             self.logger.handlers.clear()
-
-        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
-
-        if self.foreground:
+        formatter = logging.Formatter(self.log_format)
+        if foreground:
             handler = logging.StreamHandler(sys.stdout)
         else:
             handler = MqttLogHandler(self)
-
         handler.setFormatter(formatter)
         self.logger.addHandler(handler)
 
     # --- Configuration ---
-    async def _load_conf(self):
+    def _load_conf(self, config):
         def deep_update(d, u):
             for k, v in u.items():
                 if isinstance(v, dict) and isinstance(d.get(k), dict):
@@ -143,135 +218,232 @@ class TuyaMQTTBridge:
                 else:
                     d[k] = v
             return d
-        if isinstance(self.config, dict):
-            deep_update(self.mqtt_config, self.config)
-        elif isinstance(self.config, str):
-            try:
-                async with aiofiles.open(self.config, mode='r', encoding='utf-8') as f:
-                    config_data = json.loads(await f.read())
-                    deep_update(self.mqtt_config, config_data)
-            except json.JSONDecodeError as e:
-                sys.stderr.write(f"CONFIG_ERROR: Could not parse {self.config}: {e}\n")
-                sys.stderr.write(f"Configuration file {self.config} is corrupted. Using default settings.\n")
-            except FileNotFoundError:
-                async with aiofiles.open(self.config, mode='w', encoding='utf-8') as f:
-                    await f.write(json.dumps(self.mqtt_config, indent=2))
-        else:
-            raise TypeError('config must be either filename or dictionary')
+        try:
+            if config and isinstance(config, dict):
+                deep_update(self.settings, config)
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"CONFIG_ERROR: Could not parse config: {e}")
+            else:
+                print(f"CONFIG_ERROR: Could not parse config: {e}")
+
+    @staticmethod
+    @functools.lru_cache(maxsize=16)
+    def _compile_topic_regex(config_topic):
+        parts = config_topic.split('/')
+        regex_parts = []
+        for part in parts:
+            if part.startswith('$') and len(part) > 1:
+                var_name = part[1:]
+                regex_parts.append(f'(?P<{var_name}>[^/]+)')
+            else:
+                regex_parts.append(re.escape(part))
+        return re.compile('^' + '/'.join(regex_parts) + '$')
+
+    @staticmethod
+    def _match_topic(incoming_topic, config_topic):
+        if '$' not in config_topic:
+            return {'_': None} if config_topic == incoming_topic else None
+        pattern = Tuya2MQTTBridge._compile_topic_regex(config_topic)
+        m = re.match(pattern, incoming_topic)
+        if m:
+            result = m.groupdict()
+            for k, v in result.items():
+                if v.lower() == 'true': result[k] = True
+                elif v.lower() == 'false': result[k] = False
+                elif v.isdigit(): result[k] = int(v)
+                else:
+                    try: result[k] = float(v)
+                    except ValueError: pass
+            return result
+        return None
 
     # --- Core Logic ---
-    async def _recv_topic(self, msg):
+    async def recv_topic(self, msg):
+        topic_str = str(msg.topic)
+        topic_map = self.settings['topic']['subscribe']
+
         try:
             if isinstance(msg.payload, bytes):
                 payload_str = msg.payload.decode('utf-8')
             else:
                 payload_str = msg.payload
-            self.logger.info(f"Topic: {msg.topic}, Payload: {payload_str}")
+        except UnicodeDecodeError:
+            payload_str = msg.payload
+        except AttributeError:
+            payload_str = ''
+
+        self.logger.info(f"Topic: {topic_str}, Payload: {payload_str}")
+
+        try:
             payloads = json.loads(payload_str)
         except json.decoder.JSONDecodeError:
-            self.logger.info('Payload ignored')
-            return
-        except Exception:
-            self.logger.error(traceback.format_exc())
-            return
+            payloads = payload_str
+        except TypeError:
+            payloads = ''
 
         if not isinstance(payloads, list):
             payloads = [payloads]
 
-        topic_str = str(msg.topic)
-        topic_map = self.mqtt_config['topic']['subscribe']
+        # --- TOPIC INFORMATION ---
+        if topic_str == self.root_topic:
+            if not self.topic_done:
+                self.topic_done = True
+                if self.mqtt:
+                    await self.mqtt.unsubscribe(self.root_topic)
+                await self.mqtt_publisher(topic=self.root_topic, payload=json.dumps(self.settings['topic']), retain=True)
+
+        # --- SNAPSHOT ---
+        elif topic_str == self.settings['topic']['publish']['snapshot']:
+            if not self.snapshot_done:
+                self.snapshot_done = True
+                if self.mqtt:
+                    await self.mqtt.unsubscribe(self.settings['topic']['publish']['snapshot'])
+                await self.mqtt_publisher(topic=self.settings['topic']['subscribe']['add'], payload=json.dumps(payloads))
 
         # --- ADD DEVICE ---
-        if topic_str == topic_map['add']:
-            for payload in payloads:
-                task = None
-                added = None
-                parent = None
-                try:
-                    # Subdevice
-                    if 'parent' in payload and 'node_id' in payload:
-                        for _ in range(self.mqtt_config['daemon']['subdevice_add_retries']):
-                            async with self.tuya_state['lock']:
-                                if payload['parent'] in self.tuya_state['device']['id']:
-                                    if self.tuya_state['device']['id'][payload['parent']].get('status') == 'online':
-                                        parent = self.tuya_state['device']['id'][payload['parent']].get('device')
-                            if parent:
-                                added = tinytuya.DeviceAsync(dev_id=payload['id'], cid=payload['node_id'], parent=parent)
-                                async with self.tuya_state['lock']:
-                                    self.tuya_state['device']['id'][payload['node_id']] = {'device': added, 'parent': payload['parent']}
-                                    keys_to_save = ['id', 'node_id', 'parent', 'name']
-                                    self.tuya_state['device']['id'][payload['node_id']]['payload'] = {k: payload[k] for k in keys_to_save if k in payload}
-                                    self.tuya_state['device']['id'][payload['node_id']]['last_seen'] = None
-                                    if payload['node_id'] not in self.tuya_state['device']['id'][payload['parent']]['children']:
-                                        self.tuya_state['device']['id'][payload['parent']]['children'].append(payload['node_id'])
-                                    self._add_device_name_mapping(payload['node_id'], payload.get('name'))
-                                    self.logger.info(f"Subdevice added: {payload['node_id']}")
-                                    break
-                            self.logger.warning(f"Parent not found, retrying: {payload['node_id']}")
-                            await asyncio.sleep(self.mqtt_config['daemon']['retry_delay_seconds'])
-                        if added is None:
-                            self.logger.error(f"Parent not found, fail to add subdevice: {payload['node_id']}")
-                    # Device
-                    elif 'id' in payload and payload['id']:
-                        async with self.tuya_state['lock']:
-                            if payload['id'] in self.tuya_state['device']['id']:
-                                self.logger.warning(f"Already added, ignoring: {payload['id']}")
+        elif dps := self._match_topic(topic_str, topic_map['add']):
+            try:
+                async with self.op_guard.adding(last_callback=lambda: self._snapshot(True)):
+                    payloads.sort(key=lambda x: ("node_id" in x or "parent" in x))
+                    for payload in payloads:
+                        if not isinstance(payload, dict):
+                            if payload == '' or payload is None:
+                                payload = {}
                             else:
-                                self.tuya_state['device']['id'][payload['id']] = {}
-                                keys_to_save = ['id', 'ip', 'key', 'version', 'name']
-                                self.tuya_state['device']['id'][payload['id']]['payload'] = {k: payload[k] for k in keys_to_save if k in payload}
-                                self.tuya_state['device']['id'][payload['id']]['status'] = 'connecting'
-                                self.tuya_state['device']['id'][payload['id']]['last_seen'] = None
-                                task = self.task_creator(self._tuya_receiver(payload))
-                                self.tuya_state['device']['id'][payload['id']]['task'] = task
-                                self.tuya_state['device']['id'][payload['id']]['children'] = []
-                                self._add_device_name_mapping(payload['id'], payload.get('name'))
-                                self.logger.info(f"Device added and listener task created: {payload['id']}")
-                except Exception:
-                    self.logger.error(traceback.format_exc())
-                    if added:
+                                payload = {'_payload': payload}
+                        for k, v in dps.items():
+                            payload[k] = v
+                        task = None
+                        added = None
+                        parent = None
                         try:
-                            added.close()
-                        except:
-                            pass
+                            # Subdevice
+                            if 'parent' in payload and 'node_id' in payload:
+                                for _ in range(self.settings['daemon']['subdevice_add_retries']):
+                                    if payload['parent'] in self.tuya_state['device']['id']:
+                                        if self.tuya_state['device']['id'][payload['parent']].get('status') == 'online':
+                                            parent = self.tuya_state['device']['id'][payload['parent']].get('device')
+                                    if parent:
+                                        added = DeviceAsync(dev_id=payload['id'], cid=payload['node_id'], parent=parent)
+                                        self.tuya_state['device']['id'][payload['node_id']] = {'device': added, 'parent': payload['parent']}
+                                        keys_to_save = ['id', 'node_id', 'parent', 'name']
+                                        self.tuya_state['device']['id'][payload['node_id']]['payload'] = {k: payload[k] for k in keys_to_save if k in payload}
+                                        self.tuya_state['device']['id'][payload['node_id']]['last_seen'] = None
+                                        if payload['node_id'] not in self.tuya_state['device']['id'][payload['parent']]['children']:
+                                            self.tuya_state['device']['id'][payload['parent']]['children'].append(payload['node_id'])
+                                        self._add_device_name_mapping(payload['node_id'], payload.get('name'))
+                                        self.logger.info(f"Subdevice added: {payload['node_id']}")
+                                        break
+                                    self.logger.info(f"Parent not found, retrying: {payload['node_id']}")
+                                    await asyncio.sleep(self.settings['daemon']['retry_delay_seconds'])
+                                if added is None:
+                                    self.logger.error(f"Parent not found, fail to add subdevice: {payload['node_id']}")
+                            # WiFi Device
+                            elif 'key' in payload and 'ip' in payload and 'version' in payload:
+                                duplicated = False
+                                for device_info in self.tuya_state['device']['id'].values():
+                                    if 'ip' in device_info['payload'] and device_info['payload']['ip'] == payload['ip']:
+                                        duplicated = True
+                                        break
+                                if 'id' in payload:
+                                    if payload['id'] in self.tuya_state['device']['id']:
+                                        duplicated = True
+                                else:
+                                    payload['id'] = payload['ip']
+                                    if payload.get('name'):
+                                        payload['id'] = f"{payload['id']}_{payload['name']}"
+                                if duplicated:
+                                    self.logger.warning(f"Already added, ignoring: {payload['id']}")
+                                else:
+                                    self.tuya_state['device']['id'][payload['id']] = {}
+                                    keys_to_save = ['id', 'ip', 'key', 'version', 'name']
+                                    self.tuya_state['device']['id'][payload['id']]['payload'] = {k: payload[k] for k in keys_to_save if k in payload}
+                                    self.tuya_state['device']['id'][payload['id']]['status'] = 'connecting'
+                                    self.tuya_state['device']['id'][payload['id']]['last_seen'] = None
+                                    task = self.task_creator(self._tuya_receiver(payload))
+                                    self.tuya_state['device']['id'][payload['id']]['task'] = task
+                                    self.tuya_state['device']['id'][payload['id']]['children'] = []
+                                    self._add_device_name_mapping(payload['id'], payload.get('name'))
+                                    self.logger.info(f"Device added and listener task created: {payload['id']}")
+                        except Exception:
+                            self.logger.error(traceback.format_exc())
+                            if added:
+                                try:
+                                    added.close()
+                                except:
+                                    pass
+            except Exception:
+                self.logger.error(traceback.format_exc())
 
         # --- DELETE DEVICE ---
-        elif topic_str == topic_map['delete']:
-            for payload in payloads:
-                try:
-                    async with self.tuya_state['lock']:
-                        target_ids = self._get_target_ids(payload)
-                        for device_id in target_ids:
-                            if device_id in self.tuya_state['device']['id']:
-                                device_info = self.tuya_state['device']['id'][device_id]
-                                if 'task' in device_info:
-                                    device_info['task'].cancel()
-                                else: # Subdevice
-                                    try:
-                                        parent_id = device_info.get('parent')
-                                        if parent_id and parent_id in self.tuya_state['device']['id']:
-                                            self.tuya_state['device']['id'][parent_id]['children'].remove(device_id)
-                                    except (KeyError, ValueError):
-                                        pass
-                                    await self._cleanup_device(device_id)
-                                self.logger.info(f"Device deleted: {device_id}")
-                except Exception:
-                    self.logger.error(traceback.format_exc())
+        elif dps := self._match_topic(topic_str, topic_map['delete']):
+            delete_task = []
+            try:
+                async with self.op_guard.deleting(last_callback=lambda: self._snapshot(True)):
+                    for payload in payloads:
+                        if not isinstance(payload, dict):
+                            if payload == '' or payload is None:
+                                payload = {}
+                            else:
+                                payload = {'_payload': payload}
+                        for k, v in dps.items():
+                            payload[k] = v
+                        try:
+                            target_ids = self._get_target_ids(payload)
+                            for device_id in target_ids:
+                                if device_id in self.tuya_state['device']['id']:
+                                    device_info = self.tuya_state['device']['id'][device_id]
+                                    if 'task' in device_info:
+                                        delete_task.append(device_info['task'])
+                                        device_info['task'].cancel()
+                                    else: # Subdevice
+                                        try:
+                                            parent_id = device_info.get('parent')
+                                            if parent_id and parent_id in self.tuya_state['device']['id']:
+                                                self.tuya_state['device']['id'][parent_id]['children'].remove(device_id)
+                                        except (KeyError, ValueError):
+                                            pass
+                                        self._cleanup_device(device_id)
+                                    self.logger.info(f"Device deleted: {device_id}")
+                        except Exception:
+                            self.logger.error(traceback.format_exc())
+                    await asyncio.gather(*delete_task, return_exceptions=True)
+            except Exception:
+                self.logger.error(traceback.format_exc())
 
         # --- SET/GET/COMMAND ---
-        elif topic_str in (topic_map['set'], topic_map['get'], topic_map['command']):
+        elif dps := (self._match_topic(topic_str, topic_map['set']) or self._match_topic(topic_str, topic_map['get']) or self._match_topic(topic_str, topic_map['command'])):
             for payload in payloads:
+                if not isinstance(payload, dict):
+                    if payload == '' or payload is None:
+                        payload = {}
+                    else:
+                        payload = {'_payload': payload}
+                for k, v in dps.items():
+                    payload[k] = v
                 try:
-                    target_devices = await self._get_target_devices(payload)
+                    target_devices = self._get_target_devices(payload)
                     for device in target_devices:
-                        if topic_str == topic_map['set']:
-                            await device.set_multiple_values(payload['data'])
-                            device.tuya2mqtt_last_sent_time = time.monotonic()
-                            self.logger.info(f"Data set for device {device.id}")
-                        elif topic_str == topic_map['get']:
+                        if self._match_topic(topic_str, topic_map['set']):
+                            if 'data' in payload:
+                                await device.set_multiple_values(payload['data'])
+                            elif 'dp' in payload:
+                                value = None
+                                if 'value' in payload:
+                                    value = payload['value']
+                                elif '_payload' in payload:
+                                    value = payload['_payload']
+                                if value is not None:
+                                    await device.set_values(payload['dp'], value)
+                                    device.tuya2mqtt_last_sent_time = time.monotonic()
+                                    self.logger.info(f"Data set for device {device.id}")
+                                else:
+                                    self.logger.warning(f"Missing value for DP {payload['dp']} on device {device.id}")
+                        elif self._match_topic(topic_str, topic_map['get']):
                             await device.status()
                             self.logger.info(f"Status requested for device {device.id}")
-                        elif topic_str == topic_map['command']:
+                        elif self._match_topic(topic_str, topic_map['command']):
                             command_name = payload.get('command')
                             if not command_name or command_name.startswith('_'):
                                 self.logger.warning(f"Attempt to call an invalid or private command ('{command_name}') on device {device.id}. Ignoring.")
@@ -299,42 +471,44 @@ class TuyaMQTTBridge:
                 elif 'status' in payload:
                     await self._publish_daemon_status(payload)
 
+    # --- Publish Snapshot ---
+    async def _snapshot(self, details=False):
+        self.logger.info('Publishing snapshot...')
+        device_snapshot = self._get_device_payloads(details)
+        await self.mqtt_publisher(
+            topic=self.settings['topic']['publish']['snapshot'],
+            payload=json.dumps(device_snapshot, ensure_ascii=False),
+            retain=True)
+
     # --- Terminator ---
     async def _terminator(self, quit_program):
-        self.logger.info('Shutdown process initiated... Publishing snapshot...')
-
-        device_snapshot = await self._get_device_payloads(False)
-        try:
-            await self.mqtt_publisher(
-                topic=self.mqtt_config['topic']['publish']['daemon'],
-                payload=json.dumps(device_snapshot, ensure_ascii=False)
-            )
-        except:
-            self.logger.info(json.dumps(device_snapshot, ensure_ascii=False))
-
+        if self.is_shutting_down or self.shutdown_event.is_set():
+            return
+        self.is_shutting_down = True
         tasks_to_cancel = []
-        async with self.tuya_state['lock']:
-            for device_id in list(self.tuya_state['device']['id'].keys()):
-                device_info = self.tuya_state['device']['id'].get(device_id, {})
-                if 'task' in device_info:
-                    tasks_to_cancel.append(device_info['task'])
-
-        if hasattr(self, 'log_publisher_task'):
-            tasks_to_cancel.append(self.log_publisher_task)
+        for device_id in list(self.tuya_state['device']['id'].keys()):
+            device_info = self.tuya_state['device']['id'].get(device_id, {})
+            if 'task' in device_info:
+                tasks_to_cancel.append(device_info['task'])
+        if quit_program:
+            await self.mqtt_publisher(topic=self.root_topic, retain=True)
+            if hasattr(self, 'log_publisher_task'):
+                if self.log_publisher_task:
+                    tasks_to_cancel.append(self.log_publisher_task)
         for task in tasks_to_cancel:
             task.cancel()
-
         if tasks_to_cancel:
             await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
-
         self.logger.info(f"All device tasks cancelled. Exiting: {quit_program}")
-
         if quit_program:
             self.shutdown_event.set()
+        else:
+            await self._snapshot()
+            self.is_shutting_down = False
 
     # --- Helper Functions ---
     def _add_device_name_mapping(self, device_id, name):
-        """Adds a device ID to the name->ID mapping. MUST be called inside TUYA lock."""
+        """Adds a device ID to the name->ID mapping."""
         if not name:
             return
         self.tuya_state['device']['id'][device_id]['name'] = name
@@ -343,10 +517,13 @@ class TuyaMQTTBridge:
         if device_id not in self.tuya_state['device']['name'][name]:
             self.tuya_state['device']['name'][name].append(device_id)
 
-    async def _cleanup_device(self, device_id):
-        """Cleans up a device's entries. MUST be called inside TUYA lock."""
+    def _cleanup_device(self, device_id):
+        """Cleans up a device's entries."""
         if device_id in self.tuya_state['device']['id']:
-            device_info = self.tuya_state['device']['id'].pop(device_id)
+            device_info = self.tuya_state['device']['id'].pop(device_id, None)
+            if device_info is None:
+                self.logger.info(f"Device {device_id} already cleaned up or not found. Ignoring.")
+                return
             name = device_info.get('name')
             if name and name in self.tuya_state['device']['name']:
                 if device_id in self.tuya_state['device']['name'][name]:
@@ -355,11 +532,11 @@ class TuyaMQTTBridge:
                     del self.tuya_state['device']['name'][name]
             try:
                 self.task_creator(device_info['device'].close())
-            except:
-                pass
+            except Exception as e:
+                self.logger.warning(f"Failed to close device {device_id} during cleanup: {e}")
 
     def _get_target_ids(self, payload):
-        """Get a list of device IDs from a payload (by 'id' or 'name'). MUST be called inside TUYA lock."""
+        """Get a list of device IDs from a payload (by 'id' or 'name')."""
         target_ids = []
         if 'id' in payload:
             if payload['id'] in self.tuya_state['device']['id']:
@@ -368,20 +545,18 @@ class TuyaMQTTBridge:
             target_ids.extend(self.tuya_state['device']['name'][payload['name']])
         return target_ids
 
-    async def _get_target_devices(self, payload):
+    def _get_target_devices(self, payload):
         """Get a list of tinytuya device objects from a payload."""
         devices = []
-        async with self.tuya_state['lock']:
-            target_ids = self._get_target_ids(payload)
-            for device_id in target_ids:
-                if device_id in self.tuya_state['device']['id'] and 'device' in self.tuya_state['device']['id'][device_id]:
-                    devices.append(self.tuya_state['device']['id'][device_id]['device'])
+        target_ids = self._get_target_ids(payload)
+        for device_id in target_ids:
+            if device_id in self.tuya_state['device']['id'] and 'device' in self.tuya_state['device']['id'][device_id]:
+                devices.append(self.tuya_state['device']['id'][device_id]['device'])
         return devices
 
-    async def _get_device_payloads(self, details=True):
+    def _get_device_payloads(self, details=True):
         device_payloads = []
-        async with self.tuya_state['lock']:
-            all_devices_info = list(self.tuya_state['device']['id'].values())
+        all_devices_info = self.tuya_state['device']['id'].values()
         for device_info in all_devices_info:
             device_entry = device_info.get('payload', {}).copy()
             if details:
@@ -402,18 +577,18 @@ class TuyaMQTTBridge:
     async def _publish_daemon_status(self, payload):
         """Gathers and publishes the daemon's current status."""
         daemon_status = {
-            'tuya2mqtt': self.daemon_stat['version'],
+            self.root_topic: self.daemon_stat['version'],
             'uptime(min)': int((datetime.now() - self.daemon_stat['start_time']).total_seconds() / 60),
-            'mqtt_broker': self.mqtt_config['broker']['hostname'],
+            'mqtt_broker': self.settings['broker']['hostname'],
             'connected_devices_count': len(self.tuya_state['device']['id']),
         }
 
         if payload['status'] is True:
-            daemon_status['devices'] = await self._get_device_payloads(True)
+            daemon_status['devices'] = self._get_device_payloads(True)
 
         if self.mqtt_publisher:
             await self.mqtt_publisher(
-                topic=self.mqtt_config['topic']['publish']['daemon'],
+                topic=self.settings['topic']['publish']['daemon'],
                 payload=json.dumps(daemon_status, ensure_ascii=False)
             )
         else:
@@ -424,10 +599,24 @@ class TuyaMQTTBridge:
     async def _tuya_receiver(self, payload):
         device_id = payload['id']
         self.logger.info(f"Starting listener for {device_id}")
-        reconnect_delay = self.mqtt_config['daemon']['retry_delay_seconds']
+        reconnect_delay = self.settings['daemon']['retry_delay_seconds']
 
+        async def publish_status(msg):
+            try:
+                if self.mqtt_publisher:
+                    topic_template = Template(self.settings['topic']['publish']['error'])
+                    topic_final = topic_template.safe_substitute(
+                        id=payload['id'],
+                        name=self.tuya_state['device']['id'].get(payload['id'], {}).get('name', ''))
+                    await self.mqtt_publisher(
+                        topic=topic_final,
+                        payload=json.dumps({'id': payload['id'], 'Error': msg}, ensure_ascii=False))
+                    return True
+            except:
+                pass
+            return False
         try:
-            async with tinytuya.DeviceAsync(
+            async with DeviceAsync(
                 dev_id=payload['id'],
                 address=payload.get('ip', 'Auto'),
                 local_key=payload.get('key', ''),
@@ -435,27 +624,7 @@ class TuyaMQTTBridge:
                 persist=True
             ) as device:
 
-                async with self.tuya_state['lock']:
-                    self.tuya_state['device']['id'][device_id]['device'] = device
-
-                # WARNING: This optimization relies on the internal locking mechanism of tinytuya v2-async.
-                # We don't need receive lock, since we have only one receiving task
-                class DummyAsyncContext:
-                    def locked(self):
-                        return False
-                    async def __aenter__(self):
-                        pass
-                    async def __aexit__(self, exc_type, exc_val, exc_tb):
-                        pass
-                # device._conn_lock = DummyAsyncContext()
-                # device._send_lock = DummyAsyncContext()
-                device._recv_lock = DummyAsyncContext()
-                device._rcv2_lock = DummyAsyncContext()
-
-                # We don't need callbacks
-                async def DummyCallback(*args, **kwargs):
-                    return
-                device._defer_callbacks = DummyCallback
+                self.tuya_state['device']['id'][device_id]['device'] = device
 
                 # Set HB timer
                 device.tuya2mqtt_last_sent_time = time.monotonic()
@@ -467,7 +636,7 @@ class TuyaMQTTBridge:
                     device.disabledetect = (payload['dev_type'] == 'default')
 
                 while True:
-                    if time.monotonic() - device.tuya2mqtt_last_sent_time >= self.mqtt_config['daemon']['heartbeat_interval']:
+                    if time.monotonic() - device.tuya2mqtt_last_sent_time >= self.settings['daemon']['heartbeat_interval']:
                         await device.heartbeat()
                         device.tuya2mqtt_last_sent_time = time.monotonic()
 
@@ -477,117 +646,146 @@ class TuyaMQTTBridge:
                         if data is not None:
                             if 'Error' in data:
                                 # Connection error
-                                async with self.tuya_state['lock']:
-                                    if device_id in self.tuya_state['device']['id']:
+                                for key in data:
+                                    if isinstance(data[key], bytes):
+                                        data[key] = data[key].decode('utf-8')
+                                if device_id in self.tuya_state['device']['id']:
+                                    if self.tuya_state['device']['id'][device_id]['status'] != data['Error']:
                                         self.tuya_state['device']['id'][device_id]['status'] = data['Error']
-                                self.logger.error(json.dumps({'id': payload['id'], **data}))
+                                if self.mqtt_publisher:
+                                    topic_template = Template(self.settings['topic']['publish']['error'])
+                                    topic_final = topic_template.safe_substitute(
+                                        id=payload['id'],
+                                        name=self.tuya_state['device']['id'].get(payload['id'], {}).get('name', '')
+                                    )
+                                    await self.mqtt_publisher(
+                                        topic=topic_final,
+                                        payload=json.dumps({'id': payload['id'], **data}, ensure_ascii=False))
+                                else:
+                                    self.logger.error(json.dumps({'id': payload['id'], **data}))
 
                                 # TinyTuya does automatically reconnect.
                                 # Devices can sometimes take a while to re-connect to the WiFi, so if you get that error you can just wait a bit and retry the send/receive.
                                 await asyncio.sleep(reconnect_delay)
-                                reconnect_delay = min(reconnect_delay * 2, self.mqtt_config['daemon']['max_retry_delay_seconds'])
+                                reconnect_delay = min(reconnect_delay * 2, self.settings['daemon']['max_retry_delay_seconds'])
                                 continue
 
-                            if reconnect_delay != self.mqtt_config['daemon']['retry_delay_seconds']:
+                            if reconnect_delay != self.settings['daemon']['retry_delay_seconds']:
                                 self.logger.info(f"Device {device_id} reconnected successfully. Resetting backoff delay.")
-                                reconnect_delay = self.mqtt_config['daemon']['retry_delay_seconds']
+                                reconnect_delay = self.settings['daemon']['retry_delay_seconds']
 
                             if 'dps' in data:
                                 cid = device_id
-                                topic = self.mqtt_config['topic']['publish']['command']
+                                topic = self.settings['topic']['publish']['active']
 
                                 if 'data' in data:
                                     if 'cid' in data['data']:
                                         cid = data['data']['cid']
                                 else:
-                                    topic = self.mqtt_config['topic']['publish']['status']
+                                    topic = self.settings['topic']['publish']['passive']
                                     if 'cid' in data:
                                         cid = data['cid']
 
                                 name = None
-                                async with self.tuya_state['lock']:
-                                    if cid in self.tuya_state['device']['id']:
-                                        self.tuya_state['device']['id'][cid]['last_seen'] = datetime.now().isoformat()
-                                        name = self.tuya_state['device']['id'][cid].get('name')
+                                if cid in self.tuya_state['device']['id']:
+                                    self.tuya_state['device']['id'][cid]['last_seen'] = datetime.now().isoformat()
+                                    name = self.tuya_state['device']['id'][cid].get('name')
 
-                                await self.mqtt_publisher(
-                                    topic=topic,
-                                    payload=json.dumps({'id': cid, 'name': name, 'data': data['dps']}, ensure_ascii=False)
-                                )
+                                # Customization: Define topic and payload using JSON string templates.
+                                # The template must be compatible with string substitution ($ notation).
+                                # Reserved variables for dynamic substitution: $id, $name, $dp, $value, $dps.
+                                #
+                                # Example (Single DP): topic='tuya2mqtt/$id/$dp', payload='$value'
+                                # Example (Multiple DPS): topic='tuya2mqtt/$id', payload='{"data": $dps}'
+                                payload_format = self.settings.get('format', {}).get('publish', '')
+                                if '$value' in payload_format:
+                                    # Single DataPoint if $value is present.
+                                    for dp, value in data['dps'].items():
+                                        payload_template = Template(payload_format)
+                                        payload_final = payload_template.safe_substitute(
+                                            id=json.dumps(cid, ensure_ascii=False),
+                                            name=json.dumps(name, ensure_ascii=False),
+                                            dp=json.dumps(dp, ensure_ascii=False),
+                                            value=json.dumps(value, ensure_ascii=False)
+                                        )
+                                        topic_template = Template(topic)
+                                        topic_final = topic_template.safe_substitute(
+                                            id=cid, name=name, dp=dp
+                                        )
+                                        await self.mqtt_publisher(
+                                            topic=topic_final,
+                                            payload=payload_final
+                                        )
+                                else:
+                                    payload_template = Template(payload_format)
+                                    payload_final = payload_template.safe_substitute(
+                                        id=json.dumps(cid, ensure_ascii=False),
+                                        name=json.dumps(name, ensure_ascii=False),
+                                        dps=json.dumps(data['dps'], ensure_ascii=False)
+                                    )
+                                    topic_template = Template(topic)
+                                    topic_final = topic_template.safe_substitute(
+                                        id=cid, name=name
+                                    )
+                                    await self.mqtt_publisher(
+                                        topic=topic_final,
+                                        payload=payload_final
+                                    )
 
-                        async with self.tuya_state['lock']:
-                            if device_id in self.tuya_state['device']['id']:
+                        if device_id in self.tuya_state['device']['id']:
+                            if self.tuya_state['device']['id'][device_id]['status'] != 'online':
                                 self.tuya_state['device']['id'][device_id]['status'] = 'online'
+                                # await publish_status('online')
+                                await self._snapshot(True)
 
                     except Exception as e:
                         self.logger.error(f"Error in receive loop for {device_id}: {e}")
-                        async with self.tuya_state['lock']:
-                            if device_id in self.tuya_state['device']['id']:
+                        self.logger.error(traceback.format_exc())
+                        if device_id in self.tuya_state['device']['id']:
+                            if self.tuya_state['device']['id'][device_id]['status'] != str(e):
                                 self.tuya_state['device']['id'][device_id]['status'] = str(e)
+                                # await publish_status(str(e))
+                                await self._snapshot(True)
                         await asyncio.sleep(reconnect_delay)
-                        reconnect_delay = min(reconnect_delay * 2, self.mqtt_config['daemon']['max_retry_delay_seconds'])
+                        reconnect_delay = min(reconnect_delay * 2, self.settings['daemon']['max_retry_delay_seconds'])
 
         except asyncio.CancelledError:
             self.logger.info(f"Listener task for {device_id} was cancelled.")
         except Exception:
             self.logger.error(f"Unhandled exception: {traceback.format_exc()}")
         finally:
-            async with self.tuya_state['lock']:
-                if device_id in self.tuya_state['device']['id']:
-                    for child_id in list(self.tuya_state['device']['id'][device_id].get('children', [])):
-                        await self._cleanup_device(child_id)
-                    await self._cleanup_device(device_id)
+            if device_id in self.tuya_state['device']['id']:
+                for child_id in self.tuya_state['device']['id'][device_id].get('children', []):
+                    self._cleanup_device(child_id)
+                self._cleanup_device(device_id)
             self.logger.info(f"Cleaned up resources for {device_id}.")
-
-    # --- Main Application ---
-    async def run(self):
-        await self._load_conf()
-
-        if self.logger is None:
-            self._setup_logging(self.debug)
-
-        if self.debug:
-            tinytuya.set_debug(True)
-
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGTERM, lambda: self.task_creator(self._terminator(True)))
-        mqtt = self.task_creator(self.mqtt_handler())
-
-        await self.shutdown_event.wait()
-        mqtt.cancel()
-
-        try:
-            await mqtt
-        except asyncio.CancelledError:
-            print("Daemon terminated.")
 
     # --- Mqtt Lock ---
     async def mqtt_lock(self, mqtt):
-        await mqtt.subscribe(self.mqtt_config['topic']['publish']['daemon'])
-        await mqtt.publish(topic=self.mqtt_config['topic']['subscribe']['query'], payload='{"status":false}', retain=True)
+        await mqtt.subscribe(self.settings['topic']['publish']['daemon'])
+        await mqtt.publish(topic=self.settings['topic']['subscribe']['query'], payload='{"status":false}', retain=True)
         try:
-            await asyncio.wait_for(mqtt.messages.__anext__(), timeout=self.mqtt_config['daemon']['instance_lock_timeout'])
+            await asyncio.wait_for(mqtt.messages.__anext__(), timeout=self.settings['daemon']['instance_lock_timeout'])
             return True
         except:
             return False
         finally:
-            await mqtt.publish(topic=self.mqtt_config['topic']['subscribe']['query'], retain=True)
-            await mqtt.unsubscribe(self.mqtt_config['topic']['publish']['daemon'])
+            await mqtt.publish(topic=self.settings['topic']['subscribe']['query'], retain=True)
+            await mqtt.unsubscribe(self.settings['topic']['publish']['daemon'])
 
     # --- Mqtt Handler ---
     async def mqtt_handler(self):
-        reconnect_delay = self.mqtt_config['daemon']['retry_delay_seconds']
+        reconnect_delay = self.settings['daemon']['retry_delay_seconds']
         while True:
             try:
                 # 1. Cooperative Check (via anonymous client):
                 #    A graceful pre-check using a retained message.
                 async with aiomqtt.Client(
-                    hostname=self.mqtt_config['broker']['hostname'],
-                    port=self.mqtt_config['broker']['port'],
-                    username=self.mqtt_config['login'].get('username'),
-                    password=self.mqtt_config['login'].get('password'),
+                    hostname=self.settings['broker']['hostname'],
+                    port=self.settings['broker']['port'],
+                    username=self.settings['broker'].get('username'),
+                    password=self.settings['broker'].get('password'),
                 ) as client:
-                    self.logger.info(f"Using configuration file: {self.config}")
                     self.logger.info('Successfully connected to MQTT broker.')
 
                     if await self.mqtt_lock(client):
@@ -598,31 +796,44 @@ class TuyaMQTTBridge:
                 # 2. Enforced Lock (via unique client ID):
                 #    A fail-safe against race conditions.
                 async with aiomqtt.Client(
-                    hostname=self.mqtt_config['broker']['hostname'],
-                    port=self.mqtt_config['broker']['port'],
-                    username=self.mqtt_config['login'].get('username'),
-                    password=self.mqtt_config['login'].get('password'),
+                    hostname=self.settings['broker']['hostname'],
+                    port=self.settings['broker']['port'],
+                    username=self.settings['broker'].get('username'),
+                    password=self.settings['broker'].get('password'),
                     identifier=f"{self.root_topic}_{self.daemon_stat['version']}",
                 ) as self.mqtt:
 
-                    if reconnect_delay != self.mqtt_config['daemon']['retry_delay_seconds']:
+                    if reconnect_delay != self.settings['daemon']['retry_delay_seconds']:
                         self.logger.info(f"Mqtt reconnected successfully. Resetting backoff delay.")
-                        reconnect_delay = self.mqtt_config['daemon']['retry_delay_seconds']
+                        reconnect_delay = self.settings['daemon']['retry_delay_seconds']
                     self.mqtt_publisher = self.mqtt.publish
 
                     # Subscribe to all necessary topics
-                    for topic in self.mqtt_config['topic']['subscribe'].values():
-                        await self.mqtt.subscribe(topic)
+                    for topic in self.settings['topic']['subscribe'].values():
+                        subscribe_topic = re.sub(r"\$\w+", "+", topic)
+                        await self.mqtt.subscribe(subscribe_topic)
                         self.logger.info(f"Topic subscribed: {topic}")
+                    await self.mqtt.subscribe(self.settings['topic']['publish']['snapshot'])
+                    await self.mqtt.subscribe(self.root_topic)
+                    await self.mqtt_publisher(topic=self.root_topic, payload=json.dumps(self.settings['topic']), retain=True)
 
                     # Main message processing loop
                     async for message in self.mqtt.messages:
-                        self.task_creator(self._recv_topic(message))
+                        self.task_creator(self.recv_topic(message))
 
             except aiomqtt.MqttError as error:
+                try:
+                    client_id_errors = [141, 135, 2]
+                    rc_value = int(error.rc) if hasattr(error.rc, 'value') else error.rc
+                    if rc_value in client_id_errors:
+                        self.logger.info(f"Another instance is already running.")
+                        self.shutdown_event.set()
+                        break
+                except Exception as error:
+                    self.logger.error(f"Fail to parse RC code. {error}.")
                 self.logger.error(f"MQTT connection error: {error}. Reconnecting...")
                 await asyncio.sleep(reconnect_delay)
-                reconnect_delay = min(reconnect_delay * 2, self.mqtt_config['daemon']['max_retry_delay_seconds'])
+                reconnect_delay = min(reconnect_delay * 2, self.settings['daemon']['max_retry_delay_seconds'])
             except asyncio.CancelledError:
                 break
             except Exception:
@@ -630,24 +841,118 @@ class TuyaMQTTBridge:
                 await self._terminator(True)
         self.logger.info('MQTT disconnected')
 
+    # --- Main Application ---
+    # =========================================================================
+    # Execution Modes and Event Loop Management
+    # =========================================================================
+
+    # 1. Self-contained Execution (Internal Loop):
+    #    Call start(). This method executes asyncio.run() internally to begin
+    #    the loop and manage all tasks. (Blocks until completion)
+
+    # 2. External Event Loop Integration (Task Creation):
+    #    Call run(). This method returns a main async task object ready to be
+    #    integrated into an existing external event loop (e.g., via create_task).
+
+    # -------------------------------------------------------------------------
+
+    # 3. Using an External MQTT Client/Publisher (Advanced):
+    #    If integrating with an external MQTT client, follow these steps:
+    #  A. DO NOT execute the default start() or run() methods.
+    #  B. After initialization, you MUST set the publisher:
+    #     tuya2mqtt.mqtt_publisher = your_external_client.publish
+    #     (Or pass it during __init__(..., mqtt_publisher=your_external_client.publish))
+    #  C. The external MQTT client must handle topic subscription internally.
+    #  D. Upon receiving a message, dispatch the handling task by calling:
+    #     task_creator(tuya2mqtt.recv_topic(message)), which returns after each message processing is done.
+    #  E. Publish initial topic informations to 'tuya2mqtt' with the retain flag enabled upon launch.
+    async def run(self, signal_handler=True):
+        if signal_handler:
+            loop = asyncio.get_running_loop()
+            loop.add_signal_handler(signal.SIGTERM, lambda: self.task_creator(self._terminator(True)))
+        self.mqtt_task = self.task_creator(self.mqtt_handler())
+        try:
+            await self.shutdown_event.wait()
+        except asyncio.CancelledError:
+            print("Shutting down.")
+            try:
+                await self._terminator(True)
+            except Exception as e:
+                print("Error: {e}")
+        finally:
+            if not self.mqtt_task.done():
+                self.mqtt_task.cancel()
+                try:
+                    await self.mqtt_task
+                except asyncio.CancelledError:
+                    pass
+            print("Daemon terminated.")
+
     def start(self):
         """Wrapper to run the main async function."""
+        # Launch main loop
         try:
             asyncio.run(self.run())
         except KeyboardInterrupt:
             print("Foreground process interrupted by user.")
 
+    @staticmethod
+    def config_parser(parser, filename, arg_list):
+        def get_env_default(env_var_name, default=None, type_func=str):
+            value = os.getenv(env_var_name)
+            if value is not None:
+                try:
+                    return type_func(value)
+                except ValueError:
+                    print(f"Warning: Environment variable {env_var_name} has an invalid type and will be ignored.")
+            return default
+        def update_nested_dict(current_dict, keys, final_value, overwrite=True):
+            if not keys: return
+            current_key = keys[0]
+            if len(keys) == 1:
+                if current_dict.get(current_key) is None or overwrite:
+                    current_dict[current_key] = final_value
+                return
+            if current_key not in current_dict or not isinstance(current_dict[current_key], dict):
+                current_dict[current_key] = {}
+            update_nested_dict(current_dict[current_key], keys[1:], final_value, overwrite)
+        parser.add_argument('--config', type=str, default=filename, dest='config')
+        for arg_single in arg_list:
+            parser.add_argument(
+                f"--{'-'.join(arg_single['name']).lower()}",
+                default=argparse.SUPPRESS,
+                type=arg_single['type'],
+                dest='_'.join(arg_single['name']).lower()
+            )
+        args = parser.parse_args()
+        config = {}
+        try:
+            with open(args.config, 'r', encoding='utf-8') as file:
+                config = json.load(file)
+        except FileNotFoundError:
+            # Using env/cli settings.
+            pass
+        except Exception as e:
+            print(f"An error occurred while reading config file: {e}. Using env/cli settings.")
+        for arg_single in arg_list:
+            env_val = get_env_default(
+                '_'.join(arg_single['name']).upper(),
+                default=None,
+                type_func=arg_single['type']
+            )
+            if env_val is not None:
+                update_nested_dict(config, arg_single['name'], env_val)
+        for arg_single in arg_list:
+            cli_key = '_'.join(arg_single['name']).lower()
+            if hasattr(args, cli_key):
+                update_nested_dict(config, arg_single['name'], getattr(args, cli_key))
+            else:
+                update_nested_dict(config, arg_single['name'], arg_single['default'], False)
+        return args, config
+
 
 # --- main() ---
 def main():
-    # Increase file descriptor limit if possible
-    try:
-        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-        if soft < hard:
-            resource.setrlimit(resource.RLIMIT_NOFILE, (hard, hard))
-    except (ValueError, OSError) as e:
-        print(f"Could not set rlimit: {e}")
-
     # Initialize paths
     WORK_FOLDER = os.path.dirname(os.path.realpath(__file__))
     FILE_NAME = os.path.splitext(os.path.basename(__file__))[0]
@@ -655,46 +960,42 @@ def main():
     DEFAULT_CONF_FILE = f"{WORK_FOLDER}/{FILE_NAME}.conf"
 
     # Command-line argument parsing
-    if len(sys.argv) < 2:
-        print(f"Usage: tuya2mqtt start|stop|restart|foreground|debug [config_file(optional)]")
-        sys.exit(1)
-
-    command = sys.argv[1].lower()
-    CONF_FILE = sys.argv[2] if len(sys.argv) > 2 else DEFAULT_CONF_FILE
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--mode', type=str, dest='mode', default='start', choices=['start', 'stop', 'restart', 'foreground'])
+    add_argument_list = [
+        {'name': ['broker', 'hostname'], 'default': 'localhost', 'type': str},
+        {'name': ['broker', 'port'], 'default': 1883, 'type': int},
+        {'name': ['broker', 'username'], 'default': '', 'type': str},
+        {'name': ['broker', 'password'], 'default': '', 'type': str},
+    ]
+    args, config = Tuya2MQTTBridge.config_parser(parser, DEFAULT_CONF_FILE, add_argument_list)
 
     no_daemon = False
     try:
         import daemon
         from daemon import pidfile
-    except:
-        print("Canont import daemon module. Only foreground or debug modes are available.")
+    except ImportError:
+        print("Cannot import daemon module.")
         no_daemon = True
-
-    if command in ('debug', 'foreground'):
+    if args.mode == 'foreground' or no_daemon:
         print("Running in foreground mode...")
-        bridge = TuyaMQTTBridge(
-            config=CONF_FILE,
-            foreground=True,
-            debug=(command == 'debug')
-        )
+        bridge = Tuya2MQTTBridge(foreground=True, **config)
         bridge.start()
         no_daemon = True
-
     if no_daemon:
         sys.exit(0)
 
     # --- Daemon control logic ---
     pid_file_obj = pidfile.TimeoutPIDLockFile(PID_FILE)
-
-    if command == 'stop' or command == 'restart':
+    if args.mode in {'stop', 'restart'}:
         print("Stopping daemon...")
         try:
             if pid_file_obj.is_locked():
                 pid = pid_file_obj.read_pid()
                 os.kill(pid, signal.SIGTERM)
                 terminated_gracefully = False
-                for _ in range(5):
-                    time.sleep(2)
+                for _ in range(10):
+                    time.sleep(0.5)
                     try:
                         os.kill(pid, 0)
                     except ProcessLookupError:
@@ -715,10 +1016,9 @@ def main():
         finally:
             if os.path.exists(PID_FILE):
                 os.remove(PID_FILE)
-        if command == 'stop':
+        if args.mode == 'stop':
             sys.exit(0)
-
-    if command == 'start' or command == 'restart':
+    if args.mode in {'start', 'restart'}:
         if pid_file_obj.is_locked():
             print(f"Daemon already running with PID {pid_file_obj.read_pid()}. Use 'restart' or 'stop' first.")
             sys.exit(1)
@@ -727,10 +1027,10 @@ def main():
         context = daemon.DaemonContext(
             working_directory=WORK_FOLDER,
             umask=0o002,
-            pidfile=pid_file_obj,
+            pidfile=pid_file_obj
         )
         with context:
-            bridge = TuyaMQTTBridge(config=CONF_FILE)
+            bridge = Tuya2MQTTBridge(**config)
             bridge.start()
 
 
