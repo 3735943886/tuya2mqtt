@@ -17,7 +17,7 @@ from daemon import pidfile
 FOREGROUND = False
 CONF_FILE = None
 DAEMON_STAT = {
-  'version': '1.0',
+  'version': '1.0.2',
   'start_time': datetime.now(),
 }
 ROOT_TOPIC = 'tuya2mqtt'
@@ -389,7 +389,9 @@ def start():
     logging('error', 'Fail to connnect to MQTT broker')
 
 
-if __name__ == "__main__":
+def main():
+  global CONF_FILE, FOREGROUND
+
   # INCREASE FD
   soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
   if soft < hard:
@@ -457,3 +459,7 @@ if __name__ == "__main__":
       pidfile = pidfile.TimeoutPIDLockFile(PID_FILE)
       ) as context:
       start()
+
+
+if __name__ == "__main__":
+  main()
