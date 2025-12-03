@@ -246,28 +246,32 @@ class Tuya2MqttUi(ui.page):
         except (UnicodeDecodeError, json.JSONDecodeError) as e:
             self.logger.info(f"Failed to decode payload: {e}")
             payload_obj = {}
-
         devices_updated = False
         topic_conf = self.conf["topic"]
 
         # 1. Handle Daemon/Snapshot (Full List Update)
-        if Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["daemon"]) or \
-           Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["snapshot"]):
-
-            if Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["snapshot"]):
+        if Tuya2MQTTBridge.match_topic(topic_str, topic_conf["publish"]["daemon"]) or \
+           Tuya2MQTTBridge.match_topic(topic_str, topic_conf["publish"]["snapshot"]):
+            if Tuya2MQTTBridge.match_topic(topic_str, topic_conf["publish"]["snapshot"]):
                 self.event_snapshot_ready.set()
-            elif Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["daemon"]):
+            elif Tuya2MQTTBridge.match_topic(topic_str, topic_conf["publish"]["daemon"]):
                 self.event_daemon_ready.set()
                 self.data_daemon_stat = {k: v for k, v in payload_obj.items() if k != "devices"}
-
             devices_updated = self._logic_update_device_list(payload_obj, topic_str)
 
-        # 2. Handle Error Update
-        elif dps := Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["error"]):
+        # 2. Handle Status Update (Partial Update)
+        elif dps := (Tuya2MQTTBridge.match_topic(topic_str, topic_conf["publish"]["active"]) or \
+                Tuya2MQTTBridge.match_topic(topic_str, topic_conf["publish"]["passive"])):
             payload_obj.update(dps)
-            devices_updated = self._logic_update_device_status(payload_obj, status_key="Error", default_status="Unknown Error")
+            devices_updated = self._logic_update_device_status(payload_obj)
 
-        # 3. Handle Logs
+        # 3. Handle Error Update
+        elif dps := Tuya2MQTTBridge.match_topic(topic_str, topic_conf["publish"]["message"]):
+            payload_obj.update(dps)
+            if "Error" in payload_obj:
+                devices_updated = self._logic_update_device_status(payload_obj, status_key="Error", default_status="Unknown Error")
+
+        # 4. Handle Logs
         elif any(topic_str == topic_conf["log"].get(lvl) for lvl in ["warning", "error", "critical"]):
             ui.notify(message=payload_obj.get("Error") or payload_str, type="negative")
 
@@ -318,7 +322,7 @@ class Tuya2MqttUi(ui.page):
         if "parent" in self.form_device:
              self.form_device["parent"].set_autocomplete(list(self.data_parent_ids))
 
-        if topic_str and Tuya2MQTTBridge._match_topic(topic_str, self.conf["topic"]["publish"]["daemon"]):
+        if topic_str and Tuya2MQTTBridge.match_topic(topic_str, self.conf["topic"]["publish"]["daemon"]):
             # Failure to send a notification when the client is closed occasionally results in an error.
             # ui.notification(message="device list updated", timeout=0.5)
             pass
@@ -595,6 +599,19 @@ class Tuya2MqttUi(ui.page):
                 _qr_code.close()
 
         # Execute Process
+        no_key_list = []
+        no_parent_list = {}
+        def selected(no_key, value):
+            for tuyadevice in tuyadevices:
+                if tuyadevice["id"] == no_key["id"]:
+                    tuyadevice["key"] = value
+                    no_key["text"].set_text(f"{no_parent_list[value]['name'][0]}...")
+                    for child in no_key["text"]:
+                        if isinstance(child, ui.tooltip):
+                            no_key["text"].remove(child)
+                    no_key["text"].tooltip(json.dumps(no_parent_list[value]["name"])[2:-2])
+                if tuyadevice["id"] in no_parent_list[value]["id"]:
+                    tuyadevice["parent"] = no_key["id"]
         try:
             SystemConstants.WIZARD_RUNNING = True
             loop = asyncio.get_event_loop()
@@ -615,8 +632,6 @@ class Tuya2MqttUi(ui.page):
                 if gwid in iplist:
                     tuyadevices[k]["ip"] = iplist[gwid][0]
                     tuyadevices[k]["version"] = iplist[gwid][1]
-            no_key_list = []
-            no_parent_list = {}
             for tuyadevice in tuyadevices:
                 if tuyadevice.get("key", "") == "":
                     no_key_list.append({"id": tuyadevice["id"], "name": tuyadevice["name"]})
@@ -626,36 +641,23 @@ class Tuya2MqttUi(ui.page):
                             no_parent_list[tuyadevice["key"]] = {"id": [], "name": []}
                         no_parent_list[tuyadevice["key"]]["id"].append(tuyadevice["id"])
                         no_parent_list[tuyadevice["key"]]["name"].append(tuyadevice["name"])
+            with ui.dialog().props("persistent") as get_key, ui.card():
+                ui.label("Manually matching the local key").classes("text-2xl font-medium")
+                for no_key in no_key_list:
+                    ui.label(f"{no_key['id']} [{no_key['name']}]")
+                    no_key["select"] = ui.select(options=list(no_parent_list), value=list(no_parent_list)[0], on_change=lambda e: selected(no_key, e.value))
+                    no_key["text"] = ui.label("")
+                    selected(no_key, list(no_parent_list)[0])
+                    ui.separator()
+                ui.button("Close", on_click=get_key.close)
+            if no_key_list and no_parent_list:
+                self.dialog_wizard.open()
+                await get_key
+            await self._io_write_file(self.path_devices_json, json.dumps(tuyadevices, indent=4))
         except Exception as e:
             ui.notify(str(e), type="negative")
         finally:
             SystemConstants.WIZARD_RUNNING = False
-
-        def selected(no_key, value):
-            for tuyadevice in tuyadevices:
-                if tuyadevice["id"] == no_key["id"]:
-                    tuyadevice["key"] = value
-                    no_key["text"].set_text(f"{no_parent_list[value]['name'][0]}...")
-                    for child in no_key["text"]:
-                        if isinstance(child, ui.tooltip):
-                            no_key["text"].remove(child)
-                    no_key["text"].tooltip(json.dumps(no_parent_list[value]["name"])[2:-2])
-                if tuyadevice["id"] in no_parent_list[value]["id"]:
-                    tuyadevice["parent"] = no_key["id"]
-        with ui.dialog().props("persistent") as get_key, ui.card():
-            ui.label("Manually matching the local key").classes("text-2xl font-medium")
-            for no_key in no_key_list:
-                ui.label(f"{no_key['id']} [{no_key['name']}]")
-                no_key["select"] = ui.select(options=list(no_parent_list), value=list(no_parent_list)[0], on_change=lambda e: selected(no_key, e.value))
-                no_key["text"] = ui.label("")
-                selected(no_key, list(no_parent_list)[0])
-                ui.separator()
-            ui.button("Close", on_click=get_key.close)
-        if no_key_list and no_parent_list:
-            self.dialog_wizard.open()
-            await get_key
-        await self._io_write_file(self.path_devices_json, json.dumps(tuyadevices, indent=4))
-
         # Re-enable UI
         self.wizard_status.set_text("Status: Ready")
         self.form_wizard["user_code"].enable()
@@ -875,9 +877,6 @@ class Tuya2MqttUi(ui.page):
                 devices_to_add.append(filtered)
 
         await self._api_send_command("add", devices_to_add)
-        if self._logic_update_device_list(devices_to_add):
-            await self._ui_refresh_tree()
-
         ui.notify(f"Published 'add' command for {len(devices_to_add)} devices")
         dialog_element.close()
 
@@ -911,18 +910,6 @@ def main():
 @ui.page("/")
 @ui.page("/{dummy}")
 async def ui_entry_page():
-  """Web UI entry point. Redirects to the timestamp base address for iOS 26 clients."""
-  ui.add_head_html("""
-  <script>
-  var currentPath = window.location.pathname;
-  if (currentPath === "/") {
-    var userAgent = navigator.userAgent;
-    if (userAgent.includes("iPhone") && userAgent.includes("Version/26")) {
-      window.location.replace("/" + Date.now());
-    }
-  }
-  </script>
-  """)
   root = Tuya2MqttUi(**GLOBAL_CONFIG, **RuntimeContext.SHARED)
   await RuntimeContext.SHARED["mqtt_init_event"].wait()
   await root._handle_topic_registration()
@@ -938,7 +925,7 @@ async def ui_start_up():
 @app.on_shutdown
 async def ui_shut_down():
   """Application shutdown handler: Cleans up tasks and Bridge."""
-  await RuntimeContext.BRIDGE._terminator(True)
+  await RuntimeContext.BRIDGE.terminator(True)
   for task in RuntimeContext.TASKS:
     task.cancel()
   await asyncio.gather(*RuntimeContext.TASKS, return_exceptions=True)

@@ -18,18 +18,12 @@
 
 ## Installation
 
-`tuya2mqtt` requires Python 3.8 or later.
+`tuya2mqtt` requires Python 3.9 or later.
 
 Install the package and its dependencies using `pip`:
 
 ```sh
 pip install tuya2mqtt
-```
-
-Alternatively, when running from a manual clone, install the required libraries manually:
-
-```sh
-pip install tinytuya aiomqtt python-daemon
 ```
 
 -----
@@ -181,8 +175,6 @@ $ mosquitto_sub -t tuya2mqtt/extra/device/#
 {"id": "ebed836691xxxxxxb", "name": "My_Smart_Plug", "data": {"1": true}}
 {"id": "ebed836691xxxxxxb", "name": "My_Smart_Plug", "data": {"1": false}}
 ```
-
-The **`id`** field represents the `id` for Wi-Fi devices and the `node_id` for sub-devices.
 
 ### 4\. Delete a Device
 
