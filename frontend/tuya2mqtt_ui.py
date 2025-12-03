@@ -251,37 +251,28 @@ class Tuya2MqttUi(ui.page):
         topic_conf = self.conf["topic"]
 
         # 1. Handle Daemon/Snapshot (Full List Update)
-        if self._util_match_topic(topic_conf["publish"]["daemon"], topic_str) or \
-           self._util_match_topic(topic_conf["publish"]["snapshot"], topic_str):
+        if Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["daemon"]) or \
+           Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["snapshot"]):
 
-            if self._util_match_topic(topic_conf["publish"]["snapshot"], topic_str):
+            if Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["snapshot"]):
                 self.event_snapshot_ready.set()
-            elif self._util_match_topic(topic_conf["publish"]["daemon"], topic_str):
+            elif Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["daemon"]):
                 self.event_daemon_ready.set()
                 self.data_daemon_stat = {k: v for k, v in payload_obj.items() if k != "devices"}
 
             devices_updated = self._logic_update_device_list(payload_obj, topic_str)
 
-        # 2. Handle Status Update (Partial Update)
-        elif self._util_match_topic(topic_conf["publish"]["active"], topic_str) or \
-             self._util_match_topic(topic_conf["publish"]["passive"], topic_str):
-            devices_updated = self._logic_update_device_status(payload_obj)
-
-        # 3. Handle Error Update
-        elif self._util_match_topic(topic_conf["publish"]["error"], topic_str):
+        # 2. Handle Error Update
+        elif dps := Tuya2MQTTBridge._match_topic(topic_str, topic_conf["publish"]["error"]):
+            payload_obj.update(dps)
             devices_updated = self._logic_update_device_status(payload_obj, status_key="Error", default_status="Unknown Error")
 
-        # 4. Handle Logs
+        # 3. Handle Logs
         elif any(topic_str == topic_conf["log"].get(lvl) for lvl in ["warning", "error", "critical"]):
             ui.notify(message=payload_obj.get("Error") or payload_str, type="negative")
 
         if devices_updated:
             await self._ui_refresh_tree()
-
-    def _util_match_topic(self, topic_template, topic_str):
-        """Checks if a topic string matches a template with placeholders."""
-        regex_pattern = re.sub(r"\$\w+", r"([^/]+)", topic_template)
-        return re.match(f"^{regex_pattern}$", topic_str) is not None
 
     async def _api_send_command(self, command_key, payload):
         """Publishes a command via MQTT."""
@@ -327,7 +318,7 @@ class Tuya2MqttUi(ui.page):
         if "parent" in self.form_device:
              self.form_device["parent"].set_autocomplete(list(self.data_parent_ids))
 
-        if topic_str and self._util_match_topic(self.conf["topic"]["publish"]["daemon"], topic_str):
+        if topic_str and Tuya2MQTTBridge._match_topic(topic_str, self.conf["topic"]["publish"]["daemon"]):
             # Failure to send a notification when the client is closed occasionally results in an error.
             # ui.notification(message="device list updated", timeout=0.5)
             pass

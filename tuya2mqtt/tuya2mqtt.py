@@ -163,7 +163,7 @@ class Tuya2MQTTBridge:
             },
         }
         self.daemon_stat = {
-            'version': '1.2.5',
+            'version': '1.2.6',
             'start_time': datetime.now(),
         }
         self.tuya_state = {
@@ -435,7 +435,7 @@ class Tuya2MQTTBridge:
                                 elif '_payload' in payload:
                                     value = payload['_payload']
                                 if value is not None:
-                                    await device.set_values(payload['dp'], value)
+                                    await device.set_value(payload['dp'], value)
                                     device.tuya2mqtt_last_sent_time = time.monotonic()
                                     self.logger.info(f"Data set for device {device.id}")
                                 else:
