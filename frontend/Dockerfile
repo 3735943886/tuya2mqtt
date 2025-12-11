@@ -1,8 +1,13 @@
 FROM python:slim
-RUN mkdir -p /config
 WORKDIR /app
-RUN apt update && apt install -y git && rm -rf /var/lib/apt/lists/*
+RUN apt update && apt install -y --no-install-recommends python3-netifaces && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN mkdir -p /config
 COPY tuya2mqtt_ui.py ./
-CMD ["python", "./tuya2mqtt_ui.py", "--config", "/config/tuya2mqtt.conf", "--ui-port", "8373", "--ui-json-devices", "/config/devices.json", "--ui-json-snapshot", "/config/device_snapshot.json", "--ui-json-tinytuya", "/config/tinytuya.json"]
+ENV CONFIG="/config/tuya2mqtt.conf"
+ENV UI_PORT=8373
+ENV UI_JSON_DEVICES="/config/devices.json"
+ENV UI_JSON_SNAPSHOT="/config/device_snapshot.json"
+ENV UI_JSON_TINYTUYA="/config/tinytuya.json"
+CMD ["python", "./tuya2mqtt_ui.py"]
