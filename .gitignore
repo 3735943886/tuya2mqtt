@@ -2,4 +2,3 @@ dist/
 build/
 __pycache__/
 *.egg-info/
-publisher.sh

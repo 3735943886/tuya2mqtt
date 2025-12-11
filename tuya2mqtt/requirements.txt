@@ -1,3 +1,0 @@
-aiomqtt
-tinytuya
-tinytuya_async
