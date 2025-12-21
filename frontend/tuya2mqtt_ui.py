@@ -189,7 +189,7 @@ class Tuya2MqttUi(ui.page):
         logger = kwargs.pop("logger", logging.getLogger())
 
         if mqtt_event:
-            reconnect_delay = kwargs.pop("reconect_delay", 30)
+            reconnect_delay = kwargs.pop("reconnect_delay", 30)
             root_topic = kwargs.pop("root_topic", "tuya2mqtt")
             broker = kwargs.pop("broker", {"hostname": "localhost", "port": 1883})
 
