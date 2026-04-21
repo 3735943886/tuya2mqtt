@@ -1,3 +1,31 @@
+# ⚠️ DEPRECATED (Moved to rustuya-bridge)
+
+> [!IMPORTANT]
+> This project (Python-based `tuya2mqtt`) is no longer maintained. It has been fully replaced by **[rustuya-bridge](https://github.com/3735943886/rustuya-bridge)**, rewritten from scratch in Rust.
+>
+> **rustuya-bridge** offers significantly higher performance, ultra-low memory footprint, and superior concurrency handling. Existing `tuya2mqtt` users can upgrade easily by following the migration guide below to stay compatible with their current MQTT topic structure.
+
+---
+
+## 🚀 Smooth Migration to rustuya-bridge
+
+You can transition to **rustuya-bridge** without breaking your existing automations (Home Assistant, scripts, etc.) by configuring the `config.json` file. 
+
+Thanks to its flexible topic template system, `rustuya-bridge` can perfectly mimic the legacy `tuya2mqtt` topic hierarchy.
+
+**Recommended `config.json` for Migration:**
+
+```json
+{
+  "mqtt_broker": "mqtt://localhost:1883",
+  "mqtt_root_topic": "tuya2mqtt",
+  "mqtt_command_topic": "{root}/intro/device/{action}",
+  "mqtt_event_topic": "{root}/extra/device/{type}",
+  "mqtt_payload_template": "{\"id\": \"{id}\", \"name\": \"{name}\", \"data\": {dps}}",
+  "mqtt_retain": false
+}
+```
+
 # tuya2mqtt: Tuya Devices to MQTT Bridge
 
 `tuya2mqtt` is a Python script that connects Tuya smart devices to an MQTT broker. **It acts as a backend service that maintains a 24-hour TCP connection with registered Tuya devices. This allows it to instantly publish state changes to MQTT and enable device control via MQTT commands.**
